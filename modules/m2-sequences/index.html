@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M2 · Sequences &amp; NLP — DeepLearn Lab</title>
+<meta name="description" content="Seven interactive lessons from the RNN recurrence to attention and transformers: BPTT, LSTM/GRU, BPE tokenizers, embeddings and a full sentiment classifier.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-root="../../" data-module="m2">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="index.html" aria-current="page">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" style="padding-top:var(--s8)">
+    <div>
+      <p class="hero__eyebrow">Module 2 · Sequences &amp; NLP · 7 lessons</p>
+      <h1>Order changes everything.</h1>
+      <p class="hero__lede">
+        Read a sentence one token at a time, watch gradients vanish along the unrolled chain,
+        give the cell gates, train a subword tokenizer, and finish by computing attention weights
+        that you can see. Every number on screen is computed in your browser.
+      </p>
+      <div class="hstack">
+        <a class="btn btn--accent" href="m2-01-sequences-and-rnns.html" style="padding:9px 14px;font-size:var(--fs-3)">Start lesson 1 →</a>
+        <a class="btn" href="#exam" style="padding:9px 14px;font-size:var(--fs-3)">Take the module exam</a>
+      </div>
+      <div class="hero__stats" style="margin-top:var(--s6)">
+        <div class="hero__stat"><b>7</b><span>lessons</span></div>
+        <div class="hero__stat"><b>8</b><span>exact labs</span></div>
+        <div class="hero__stat"><b>10</b><span>exam questions</span></div>
+        <div class="hero__stat"><b>0</b><span>external assets</span></div>
+      </div>
+    </div>
+    <div aria-hidden="true">
+      <svg viewBox="0 0 420 320" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
+        <defs>
+          <linearGradient id="m2edge" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".15"/>
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity=".75"/>
+          </linearGradient>
+        </defs>
+        <g stroke="url(#m2edge)" stroke-width="1.5" fill="none">
+          <path d="M45 70 C110 20, 150 120, 210 70 S310 20, 380 90"/>
+          <path d="M45 130 C110 80, 150 180, 210 130 S310 80, 380 150"/>
+          <path d="M45 190 C110 140, 150 240, 210 190 S310 140, 380 210"/>
+          <path d="M45 250 C110 200, 150 300, 210 250 S310 200, 380 270"/>
+        </g>
+        <g fill="var(--surface)" stroke="var(--accent)" stroke-width="2">
+          <circle cx="45" cy="70" r="11"/><circle cx="45" cy="130" r="11"/>
+          <circle cx="45" cy="190" r="11"/><circle cx="45" cy="250" r="11"/>
+          <circle cx="210" cy="70" r="11"/><circle cx="210" cy="130" r="11"/>
+          <circle cx="210" cy="190" r="11"/><circle cx="210" cy="250" r="11"/>
+          <circle cx="380" cy="90" r="13" fill="var(--accent)" stroke="none"/>
+          <circle cx="380" cy="150" r="13" fill="var(--accent)" stroke="none"/>
+          <circle cx="380" cy="210" r="13" fill="var(--accent)" stroke="none"/>
+          <circle cx="380" cy="270" r="13" fill="var(--accent)" stroke="none"/>
+        </g>
+        <g font-family="ui-monospace, monospace" font-size="10" fill="var(--ink-3)">
+          <text x="24" y="306">x₁…x₄</text><text x="182" y="306">hidden states</text><text x="350" y="306">outputs</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="section-head">
+      <h2>How to use this module</h2>
+      <p>offline · exact labs · read in order</p>
+    </div>
+    <div class="grid3">
+      <div class="callout callout--tip" style="margin:0">
+        <p class="callout__title">Double-click a lesson</p>
+        <p>Everything runs from <code>file://</code>. No server, no account, no CDN. KaTeX is vendored
+           locally and every visual is drawn from numbers computed in your browser.</p>
+      </div>
+      <div class="callout callout--bridge" style="margin:0">
+        <p class="callout__title">Read the badge first</p>
+        <p><span class="badge badge--exact">Exact math</span> means the numbers are computed live.
+           <span class="badge badge--illustrative">Illustrative</span> means hand-built values — the
+           analogy and sentiment-trace demos say so explicitly.</p>
+      </div>
+      <div class="callout callout--math" style="margin:0">
+        <p class="callout__title">Notation is fixed</p>
+        <p>\(T\) is sequence length, \(H\) hidden width, \(\mathbf{h}_t\) the state; softmax takes
+           logits, and attention scores are \(QK^\top/\sqrt{d_k}\). The same symbols appear in M0–M6.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap" id="lessons">
+    <div class="section-head">
+      <h2>The seven lessons</h2>
+      <p>M2 · sequences &amp; NLP</p>
+    </div>
+
+    <div class="module-grid">
+      <a class="module-card" href="m2-01-sequences-and-rnns.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M2 · 01</span>
+          <span class="tag">RNN</span>
+        </div>
+        <h3>Sequences and recurrent networks</h3>
+        <p>Why order matters, the recurrence h_t = tanh(x_t W_xh + h_{t−1} W_hh + b_h), a three-step unroll and DH + H² + H parameters.</p>
+        <div class="module-card__meta">
+          <span>Lesson 1 of 7 · 12 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m2-02-bptt-and-vanishing-gradients.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M2 · 02</span>
+          <span class="tag">BPTT</span>
+        </div>
+        <h3>BPTT and vanishing gradients</h3>
+        <p>One chain rule reused at every timestep, products of Jacobians, spectral radius, and global-norm gradient clipping.</p>
+        <div class="module-card__meta">
+          <span>Lesson 2 of 7 · 13 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m2-03-lstm-and-gru.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M2 · 03</span>
+          <span class="tag">LSTM</span>
+        </div>
+        <h3>LSTM and GRU</h3>
+        <p>All six LSTM equations, three GRU gates with their interpolation, worked gate values, bidirectional and stacked shapes.</p>
+        <div class="module-card__meta">
+          <span>Lesson 3 of 7 · 16 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m2-04-tokenization.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M2 · 04</span>
+          <span class="tag">BPE</span>
+        </div>
+        <h3>Tokenization</h3>
+        <p>Four exact BPE merges on low lower lowest, WordPiece and SentencePiece, vocabulary budgets and leakage.</p>
+        <div class="module-card__meta">
+          <span>Lesson 4 of 7 · 14 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m2-05-embeddings.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M2 · 05</span>
+          <span class="tag">Embeddings</span>
+        </div>
+        <h3>Word embeddings</h3>
+        <p>Lookup as one-hot matmul, skip-gram with negative sampling, exact cosine similarity and carefully labelled analogies.</p>
+        <div class="module-card__meta">
+          <span>Lesson 5 of 7 · 14 min read</span>
+          <span>1 exact + 1 illustrative lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m2-06-sentiment-lstm.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M2 · 06</span>
+          <span class="tag">PyTorch</span>
+        </div>
+        <h3>Sentiment LSTM, end to end</h3>
+        <p>Vocabulary → embedding → LSTM → head with packing, class-weighted CE, and a complete toy-corpus script in PyTorch and Keras.</p>
+        <div class="module-card__meta">
+          <span>Lesson 6 of 7 · 18 min read</span>
+          <span>1 exact + 1 illustrative lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m2-07-attention-and-transformers.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M2 · 07</span>
+          <span class="tag">Attention</span>
+        </div>
+        <h3>Attention and transformers</h3>
+        <p>Scaled dot-products with real softmax weights, multi-head concatenation, sinusoidal PE and a minimal encoder block.</p>
+        <div class="module-card__meta">
+          <span>Lesson 7 of 7 · 17 min read</span>
+          <span>2 exact labs</span>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <section class="roadmap" id="exam-section" style="padding-top:0">
+    <div class="section-head">
+      <h2 id="exam">Module exam</h2>
+      <p>10 questions · feedback after submit</p>
+    </div>
+    <p class="small muted">
+      Covers all seven M2 lessons. Everything asked here is derived in the lessons above; answers
+      are stored locally, so you can leave and come back.
+    </p>
+
+    <section class="quiz" data-quiz="m2-exam" data-exam="1">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "M2 module exam — sequences & NLP",
+        "questions": [
+          {
+            "q": "For D_in = 3 and H_hidden = 4, how many parameters does a vanilla RNN cell have?",
+            "options": ["12", "16", "32", "128"],
+            "correct": 2,
+            "why": [
+              "That is only W_xh.",
+              "That is only W_hh.",
+              "Correct: DH + H² + H = 12 + 16 + 4 = 32.",
+              "That is the four-gate LSTM count for the same widths."
+            ]
+          },
+          {
+            "q": "With weight scale 0.5 and tanh'(0)=1, what is the gradient after 20 BPTT steps?",
+            "options": ["0.5", "9.5×10⁻⁷", "0.125", "38.3"],
+            "correct": 1,
+            "why": [
+              "That is one step, not twenty.",
+              "Correct: 0.5²⁰ = 9.54×10⁻⁷ — the vanishing regime.",
+              "That is sigmoid'(0) multiplied by the scale.",
+              "That is 1.2²⁰, the exploding regime."
+            ]
+          },
+          {
+            "q": "Which operation fixes exploding gradients without changing the model?",
+            "options": [
+              "Clip each gradient component to [−1,1]",
+              "Clip the global gradient norm before optimizer.step()",
+              "Raise the learning rate",
+              "Remove the hidden bias"
+            ],
+            "correct": 1,
+            "why": [
+              "Value clipping does not guarantee a bounded vector norm.",
+              "Correct: g ← g·min(1, τ/‖g‖), applied between backward and step.",
+              "That makes instability worse.",
+              "Biases do not cause the exploding product."
+            ]
+          },
+          {
+            "q": "For a one-gate block with D=3, H=4, how many parameters does an LSTM cell have?",
+            "options": ["32", "96", "128", "64"],
+            "correct": 2,
+            "why": [
+              "That is a vanilla RNN.",
+              "That is a GRU (three gate blocks).",
+              "Correct: 4·(3·4 + 4² + 4) = 4·32 = 128.",
+              "That uses only two gate blocks."
+            ]
+          },
+          {
+            "q": "How many BPE merges are needed to turn the 'low lower lowest' vocabulary from 8 symbols to 12?",
+            "options": ["3", "4", "8", "12"],
+            "correct": 1,
+            "why": [
+              "Three merges would give V = 11.",
+              "Correct: each merge adds one symbol: lo, low, lowe, low</w>.",
+              "That is the initial token count N₀.",
+              "That is the resulting vocabulary size, not the merge count."
+            ]
+          },
+          {
+            "q": "With V = 30,000 and D = 512, the embedding table contains…",
+            "options": ["30,512 parameters", "15,360,000 parameters", "512,000 parameters", "30,000 parameters"],
+            "correct": 1,
+            "why": [
+              "That adds instead of multiplying.",
+              "Correct: V·D = 30,000 × 512 = 15,360,000.",
+              "That assumes V = 1,000.",
+              "That counts rows only."
+            ]
+          },
+          {
+            "q": "Which statement about the skip-gram loss with u=(1,0), v=(2,1), v_n=(−1,0), K=1 is correct?",
+            "options": [
+              "The loss is −log σ(2) − log σ(1) ≈ 0.440",
+              "The loss is log σ(2) + log σ(1) ≈ −0.440",
+              "The loss requires a full softmax over V",
+              "The loss is always zero for positive contexts"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: 0.127 + 0.313 = 0.440 with the sign convention in lesson 05.",
+              "That has the wrong sign; losses are positive.",
+              "Negative sampling avoids the full softmax.",
+              "Positive contexts still contribute a positive loss."
+            ]
+          },
+          {
+            "q": "In a sentiment pipeline with N=4, T=6, D=8 and a bidirectional LSTM of width H=16, the classifier head receives…",
+            "options": ["(4, 6, 8)", "(4, 16)", "(4, 32)", "(4, 2)"],
+            "correct": 2,
+            "why": [
+              "That is the embedding output.",
+              "That is one direction only.",
+              "Correct: concatenating forward and backward final states gives (N, 2H) = (4, 32).",
+              "That is the logit shape after the head."
+            ]
+          },
+          {
+            "q": "For Q=K=((1,0),(0,1),(1,1)) and d_k=2, the second row of scaled attention weights is…",
+            "options": [
+              "(0.4011, 0.1978, 0.4011)",
+              "(0.1978, 0.4011, 0.4011)",
+              "(0.2483, 0.2483, 0.5035)",
+              "(0.3333, 0.3333, 0.3333)"
+            ],
+            "correct": 1,
+            "why": [
+              "That is row 1, not row 2.",
+              "Correct: q₂·k₂/√2 and q₂·k₃/√2 are both 0.7071, giving (0.198, 0.401, 0.401).",
+              "That is row 3.",
+              "The scores are not equal, so the weights are not uniform."
+            ]
+          },
+          {
+            "q": "For sinusoidal PE with i=0 and offset k=3, what is PE(p)·PE(p+3)?",
+            "options": ["0", "1", "cos 3 ≈ −0.9900", "It depends on p"],
+            "correct": 2,
+            "why": [
+              "The dot product is not zero for this pair.",
+              "That would require k = 0.",
+              "Correct: sin(p)sin(p+k)+cos(p)cos(p+k)=cos(k), independent of p.",
+              "The identity removes the dependence on p."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+  </section>
+
+  <footer class="sitefoot">
+    <div>DeepLearn Lab · M2 Sequences &amp; NLP · static notes, built to be read offline</div>
+    <div class="hstack" style="gap:var(--s4)">
+      <a href="../../index.html">All modules</a>
+      <a href="#" data-action="search">Search</a>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </div>
+  </footer>
+</main>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m2-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

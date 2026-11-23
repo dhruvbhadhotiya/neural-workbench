@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Object detection: boxes, IoU, NMS and anchors · DeepLearn Lab</title>
+<meta name="description" content="From sliding windows to R-CNN, SSD and YOLO — compute IoU, run NMS and evaluate mAP on a small toy set.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m1" data-lesson="m1-07" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="index.html" aria-current="page">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 1 · CNNs</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M1 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m1-07">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M1 CNNs</a> / <span>Object detection</span>
+    </nav>
+
+    <h1>Object detection: boxes, IoU, NMS and anchors</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 7 of 8 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">Detection predicts both what and where, with a variable number of objects. The machinery is checkable arithmetic: box overlap, greedy suppression and class-wise precision–recall.</p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+          <li>Contrast two-stage and one-stage detectors and explain anchors.</li>
+          <li>Compute IoU from two boxes by hand and in the lab.</li>
+          <li>Run non-maximum suppression on a small set of scored boxes.</li>
+          <li>Define precision, recall and AP at an IoU threshold without inventing benchmark numbers.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>Classification assigns one label to a whole image. Detection assigns labels and boxes, and the number of objects is not known in advance — so a detector must propose candidate regions and then decide which ones survive.</p>
+    </aside>
+
+    <h2 id="intuition">Intuition: propose, score, suppress</h2>
+
+    <p>
+      A sliding-window classifier runs over the image at many positions and scales — correct but
+      wasteful. R-CNN-style two-stage detectors first propose a manageable set of candidate boxes
+      and then classify each one. One-stage detectors (SSD, YOLO) skip proposals: they predict
+      boxes directly from a regular grid, using several grid resolutions so both large and small
+      objects get a suitable scale.
+    </p>
+    <p>
+      <strong>Anchors</strong> are fixed reference boxes of various sizes and aspect ratios tiled
+      over the grid. The network predicts offsets from an anchor rather than absolute coordinates,
+      which makes early training easier. Because neighbouring anchors often describe the same
+      object, <strong>non-maximum suppression</strong> keeps the highest-scoring box and discards
+      overlapping duplicates.
+    </p>
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols</p>
+      <p>\(A,B\): predicted and ground-truth boxes · \(s_i\): box score ·
+      \(x,y,w,h\): box centre and size · subscript \(a\): anchor ·
+      \(\mathrm{IoU}\): intersection over union · \(\tau\): NMS IoU threshold.</p>
+    </div>
+    
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="iou">1 · Intersection over union</h3>
+    \[ \mathrm{IoU}(A,B)=\frac{|A\cap B|}{|A\cup B|} \]
+    <p>
+      Worked with corner format \((x_1,y_1,x_2,y_2)\): \(A=(0,0,4,4)\) (area 16),
+      \(B=(2,2,6,6)\) (area 16). Intersection corners are
+      \((\max(0,2),\max(0,2),\min(4,6),\min(4,6))=(2,2,4,4)\), area \(2\cdot2=4\).
+      Union \(=16+16-4=28\). So \(\mathrm{IoU}=4/28\approx0.1429\).
+      Always state the corner order; \([x,y,w,h]\) needs conversion first.
+    </p>
+
+    <h3 id="nms">2 · Non-maximum suppression</h3>
+    <p>
+      Sort boxes by decreasing score, keep the top box, delete every remaining box with
+      \(\mathrm{IoU}>\tau\) to it, and repeat. Worked: scores \(0.9,0.8,0.7\) for boxes 1,2,3 with
+      \(\mathrm{IoU}(1,2)=0.5\), \(\mathrm{IoU}(1,3)=0.1\), \(\tau=0.3\). Keep box 1; box 2 is
+      suppressed (\(0.5&gt;0.3\)); box 3 survives (\(0.1\le0.3\)). Kept indices: \(\{1,3\}\).
+      NMS is normally run <em>per class</em>, since two objects of different classes may overlap.
+    </p>
+
+    <h3 id="map">3 · Precision, recall and AP</h3>
+    \[ P=\frac{TP}{TP+FP}, \qquad R=\frac{TP}{TP+FN} \]
+    <p>
+      Worked toy set with three ground-truth objects and five ranked detections:
+      outcomes correct, wrong, correct, correct, wrong. Cumulative TP \(=(1,1,2,3,3)\),
+      FP \(=(0,1,1,1,2)\). Precision \(=(1,0.5,0.667,0.75,0.6)\); recall
+      \(=(0.333,0.333,0.667,1,1)\). Four-point interpolation at recall
+      \(0,\frac13,\frac23,1\) takes the maximum precision attainable at or beyond each level:
+      \((1,1,0.75,0.75)\), so \(\mathrm{AP}=2.75/4=\mathbf{0.875}\).
+      mAP averages AP over classes at a stated IoU threshold (e.g. mAP@0.5) — the threshold and
+      averaging rule must always be written down.
+    </p>
+
+    <h3 id="anchors">4 · Anchor offsets</h3>
+    \[ t_x=\frac{x-x_a}{w_a},\quad t_y=\frac{y-y_a}{h_a},\quad
+       t_w=\log\frac{w}{w_a},\quad t_h=\log\frac{h}{h_a} \]
+    <p>
+      Worked with a box centre \(x=10\), anchor centre \(x_a=8\), anchor width \(w_a=4\):
+      \(t_x=(10-8)/4=0.5\). If the box width is \(w=6\), \(t_w=\log(6/4)\approx0.405\).
+      The model predicts offsets; adding them back reconstructs the box.
+    </p>
+    
+
+    <h2 id="lab">Hands-on labs</h2>
+    <p class="small muted">Every number below is computed in your browser from the inputs you can change.</p>
+<section class="lab" data-widget="m1-07-iou-nms" data-badge="exact"
+         data-title="IoU matrix and NMS"
+         data-note="Exact: box intersections, NMS decisions and AP@0.5 are computed from the displayed boxes and scores.">
+  <div class="lab__body"></div>
+</section>
+
+<section class="lab" data-widget="m1-07-window-to-grid" data-badge="exact"
+         data-title="From sliding windows to a detector grid"
+         data-note="Exact: window counts, grid cells and anchor counts are computed from the stride and grid sliders.">
+  <div class="lab__body"></div>
+</section>
+
+    <h2 id="code">Code</h2>
+<div class="tabs" data-tabs>
+  <div class="tabs__list" role="tablist">
+    <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+  </div>
+  <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+from torchvision.ops import nms
+
+# Architecture only: weights=None, so nothing is downloaded.
+model = fasterrcnn_resnet50_fpn(weights=None, num_classes=91)
+model.eval()
+print(type(model.backbone).__name__, "FPN backbone",
+      model.rpn.head.conv.out_channels, "RPN anchors ->",
+      model.roi_heads.box_predictor.cls_score.in_features, "ROI features")
+
+# Synthetic boxes in (x1, y1, x2, y2) corner format
+boxes = torch.tensor([[0., 0., 4., 4.], [2., 2., 6., 6.], [10., 10., 14., 14.]])
+scores = torch.tensor([0.9, 0.8, 0.7])
+keep = nms(boxes, scores, iou_threshold=0.3)
+print("kept", keep.tolist())            # tensor([0, 2]) — box 1 overlaps box 0
+
+# Inference shape convention: list of (3, H, W) images in [0,1]
+# with torch.no_grad(): out = model([torch.rand(3, 320, 320)])
+# out[0]["boxes"] (K,4), out[0]["labels"] (K,), out[0]["scores"] (K,)</code></pre>
+  </div>
+</div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Wrong corner order</p>
+        <p>Mixing (x1,y1,x2,y2) with (x,y,w,h) turns a 0.14 IoU into nonsense. Convert explicitly before computing overlap, and assert x2>x1, y2>y1.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Class-agnostic NMS</p>
+        <p>Suppressing across classes deletes a pedestrian standing in front of a car. Run NMS separately per class (or use class-aware/soft-NMS).</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">A single-threshold mAP</p>
+        <p>mAP@0.5 and mAP@[0.5:0.95] are different numbers. State the threshold, the interpolation and whether classes are averaged.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Anchor and stride mismatch</p>
+        <p>An anchor smaller than the grid stride cannot be assigned well at that scale. Use multiple feature-map scales so anchor sizes match the local stride.</p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+    <p>
+      A reader runs NMS with <code>iou_threshold=0.05</code> and reports “all boxes disappeared”.
+      The boxes are valid and scores are between 0 and 1.
+    </p>
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The threshold is far too low: almost any pair of boxes for the same object has IoU above
+        0.05, so the first (highest-scoring) box suppresses everything else. Use 0.3–0.5 as a
+        starting point and inspect the pairwise IoU matrix — the lab prints it. Also confirm NMS
+        is not being run across classes that legitimately overlap.
+      </p>
+      <p class="small muted">If even one box is removed when there is only one detection, check that
+      coordinates are corner-form and that no duplicate entry with a higher score was introduced.</p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+    <section class="quiz" data-quiz="m1-07">
+      <script type="application/json" class="quiz__data">
+{
+  "title": "Check yourself — Object detection",
+  "questions": [
+    {
+      "q": "For A=(0,0,4,4) and B=(2,2,6,6) in corner format, IoU is:",
+      "options": [
+        "0.25",
+        "1/7 ≈ 0.143",
+        "0.5",
+        "4/16 = 0.25"
+      ],
+      "correct": 1,
+      "why": [
+        "Not the intersection-over-union ratio.",
+        "Correct: intersection 4, union 28, 4/28=1/7.",
+        "Too high.",
+        "Uses the wrong denominator."
+      ]
+    },
+    {
+      "q": "NMS first:",
+      "options": [
+        "Deletes the lowest-scoring box",
+        "Sorts boxes by score and keeps the top one",
+        "Computes mAP",
+        "Resizes anchors"
+      ],
+      "correct": 1,
+      "why": [
+        "It suppresses boxes overlapping a kept box, not the lowest scorer first.",
+        "Correct: sort descending, keep, suppress overlaps, repeat.",
+        "Evaluation comes after NMS.",
+        "Anchors are fixed before prediction."
+      ]
+    },
+    {
+      "q": "With NMS threshold 0.3 and IoU(1,2)=0.5, IoU(1,3)=0.1, scores 0.9>0.8>0.7:",
+      "options": [
+        "Keep 1,2,3",
+        "Keep 1 and 3",
+        "Keep 2 only",
+        "Keep 1 only"
+      ],
+      "correct": 1,
+      "why": [
+        "Box 2 should be suppressed.",
+        "Correct: 0.5>0.3 removes 2; 0.1≤0.3 keeps 3.",
+        "Box 1 has the highest score.",
+        "Box 3 is far enough away."
+      ]
+    },
+    {
+      "q": "A two-stage detector is characterised by:",
+      "options": [
+        "A single grid of predictions",
+        "A region-proposal stage before classification",
+        "No anchors",
+        "Only one feature scale"
+      ],
+      "correct": 1,
+      "why": [
+        "That describes YOLO/SSD-style one-stage detectors.",
+        "Correct: R-CNN family proposes then classifies.",
+        "Most use anchors.",
+        "Both families can use multiple scales."
+      ]
+    },
+    {
+      "q": "For anchor x_a=8, w_a=4 and box x=10, t_x is:",
+      "options": [
+        "2",
+        "0.5",
+        "0.25",
+        "8"
+      ],
+      "correct": 1,
+      "why": [
+        "That is the raw difference.",
+        "Correct: (10−8)/4 = 0.5.",
+        "Wrong divisor.",
+        "That is the anchor centre."
+      ]
+    },
+    {
+      "q": "Precision is defined as:",
+      "options": [
+        "TP/(TP+FN)",
+        "TP/(TP+FP)",
+        "FP/(TP+FP)",
+        "TP/N"
+      ],
+      "correct": 1,
+      "why": [
+        "That is recall.",
+        "Correct: of predicted positives, how many are correct.",
+        "That is the false-discovery rate.",
+        "That is accuracy-like, not precision."
+      ]
+    },
+    {
+      "q": "In the worked 5-detection example, AP with four-point interpolation is:",
+      "options": [
+        "0.6",
+        "0.75",
+        "0.875",
+        "1.0"
+      ],
+      "correct": 2,
+      "why": [
+        "That is the last point's precision.",
+        "That is two of the four values.",
+        "Correct: (1+1+0.75+0.75)/4 = 0.875.",
+        "Two false positives prevent perfection."
+      ]
+    },
+    {
+      "q": "Why does SSD use several feature-map scales?",
+      "options": [
+        "To increase the batch size",
+        "To match anchors of different sizes to objects at different scales",
+        "To remove NMS",
+        "To change the loss"
+      ],
+      "correct": 1,
+      "why": [
+        "Batch size is unrelated.",
+        "Correct: small objects need fine strides, large ones coarse strides.",
+        "NMS is still used.",
+        "The loss stays a classification plus box regression loss."
+      ]
+    }
+  ]
+}
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+    <div class="keyidea">
+      <p>
+1 · Detection adds localisation to classification; two-stage models propose regions, one-stage models predict on a grid with anchors at several scales.<br>
+2 · IoU = |A∩B|/|A∪B| (4/28≈0.143 in the worked example), and NMS greedily keeps the highest score while suppressing boxes above a threshold.<br>
+3 · AP is the precision–recall summary at a stated IoU threshold (0.875 in the toy calculation); mAP averages AP over classes — always state the rule.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m1-07">
+      <h2>Cheat sheet — M1·07</h2>
+      <ul>
+          <li>\(\mathrm{IoU}=|A\cap B|/|A\cup B|\); corner format \((x_1,y_1,x_2,y_2)\).</li>
+          <li>Worked: A=(0,0,4,4), B=(2,2,6,6) → 4/28 ≈ 0.143.</li>
+          <li>NMS: sort by score → keep top → remove IoU &gt; τ → repeat; per class.</li>
+          <li>Precision \(TP/(TP+FP)\), recall \(TP/(TP+FN)\).</li>
+          <li>Anchor offsets: \(t_x=(x-x_a)/w_a,\; t_w=\log(w/w_a)\).</li>
+          <li>mAP requires a stated IoU threshold and class-averaging rule.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+        <li>Girshick, R. — <em>Rich Feature Hierarchies for Accurate Object Detection and Semantic Segmentation</em> (2014).</li>
+        <li>Ren, S. — <em>Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks</em> (2015).</li>
+        <li>Liu, W. — <em>SSD: Single Shot MultiBox Detector</em> (2015).</li>
+        <li>Redmon, J. — <em>You Only Look Once: Unified, Real-Time Object Detection</em> (2015).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m1-06-tuning-and-augmentation.html">← Previous: Tuning & augmentation</a>
+      <a href="m1-08-transfer-learning-and-gradcam.html">Next: Transfer & Grad-CAM →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M1 CNNs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m1-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

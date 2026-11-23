@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linear algebra, chain rule and probability cheatsheets · DeepLearn Lab</title>
+<meta name="description" content="A reference page for matrix-calculus identities, Jacobian products, entropy/KL/cross-entropy relations, the softmax Jacobian, batch-norm derivatives and attention shapes.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m6" data-lesson="m6-06" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="index.html" aria-current="page">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search lessons</button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 6 · Advanced toolkit</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M6 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m6-06">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M6 Advanced toolkit</a> / <span>Math cheatsheets</span>
+    </nav>
+
+    <h1>Linear algebra, chain rule and probability</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 6 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Every formula this course uses, written once with consistent symbols and one worked numeric
+      example each. Keep this page open while reading the other modules.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Look up the derivative of a scalar or matrix expression without re-deriving it.</li>
+        <li>Compose Jacobians in the correct order and predict a linear map's effect on area.</li>
+        <li>Relate entropy, KL divergence and cross-entropy with numbers.</li>
+        <li>Check attention and softmax shapes and derivatives before debugging code.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        The same linear algebra and probability you used for logistic regression still apply — but
+        now the objects are matrices of shape \((N,C,H,W)\) and the chain rule is a product of
+        Jacobians. Getting the transpose or the order wrong is the most common silent bug in a
+        hand-written backward pass.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: derivatives are local linear maps</h2>
+
+    <p>
+      A derivative is not a number in general; it is the matrix of a linear approximation at a
+      point. For a scalar loss the gradient is a vector; for a vector-valued function the derivative
+      is a Jacobian. Composing functions composes their local linear maps — which means matrix
+      multiplication, in the same order as the functions were composed.
+    </p>
+
+    <p>
+      That geometric view makes two facts obvious. First, a Jacobian applied to the unit square
+      turns it into a parallelogram, whose area is scaled by \(|\det J|\). Second, the derivative
+      of a softmax is not diagonal: changing one logit moves every probability.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Write the shape of every derivative next to it. A transpose error usually survives the
+        forward pass and fails only in the backward pass — with a shape error or, worse, with
+        silently wrong gradients of the same shape.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="matrix">1 · Matrix-calculus identities</h3>
+
+    <table class="shape-table">
+      <caption>Scalar-by-vector and scalar-by-matrix derivatives (denominator layout)</caption>
+      <thead>
+        <tr><th>expression</th><th>derivative</th><th>shape of derivative</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>\(f=a^\top x\)</td><td>\(\partial f/\partial x=a\)</td><td>\((D)\)</td></tr>
+        <tr><td>\(f=x^\top A x\)</td><td>\((A+A^\top)x\)</td><td>\((D)\)</td></tr>
+        <tr><td>\(f=\lVert x\rVert_2^2\)</td><td>\(2x\)</td><td>\((D)\)</td></tr>
+        <tr><td>\(f=\operatorname{tr}(AB)\)</td><td>\(\partial f/\partial A=B^\top\)</td><td>shape of \(A^\top\)</td></tr>
+        <tr><td>\(Y=AX\)</td><td>\(\partial Y/\partial X\) acts as left-multiply by \(A\)</td><td>contract with \(A^\top\) in backward</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Here \(x,a\in\mathbb{R}^{D}\), \(A\in\mathbb{R}^{D\times D}\), and \(AB\) is square so the
+      trace is defined. "Denominator layout" means the gradient has the shape of the denominator
+      (the thing you differentiate with respect to).
+    </p>
+
+    <p>
+      <strong>Worked examples.</strong>
+      (i) \(a=(2,3)\), \(x=(1,4)\): \(a^\top x=2\cdot1+3\cdot4=14\) and \(\partial f/\partial x=(2,3)\).
+      (ii) \(A=\begin{bmatrix}1&2\\0&3\end{bmatrix}\), \(x=(1,2)\): \(f=x_1^2+2x_1x_2+3x_2^2=1+4+12=17\);
+      \(A+A^\top=\begin{bmatrix}2&2\\2&6\end{bmatrix}\) and \((A+A^\top)x=(2+4,\;2+12)=(6,14)\),
+      which matches direct differentiation.
+      (iii) \(A=\begin{bmatrix}1&2\\3&4\end{bmatrix}\), \(B=\begin{bmatrix}5&6\\7&8\end{bmatrix}\):
+      \(AB=\begin{bmatrix}19&22\\43&50\end{bmatrix}\), \(\operatorname{tr}(AB)=19+50=69\), and
+      \(\partial f/\partial A=B^\top=\begin{bmatrix}5&7\\6&8\end{bmatrix}\).
+    </p>
+
+    <h3 id="jacobian">2 · Jacobian chain rule</h3>
+
+    \[ J_{f\circ g}(x) = J_f\!\left(g(x)\right)\,J_g(x) \]
+
+    <p>
+      \(g:\mathbb{R}^2\to\mathbb{R}^2\) is applied first, \(f:\mathbb{R}^2\to\mathbb{R}^2\) second.
+      The product is evaluated at \(g(x)\) for the outer Jacobian and at \(x\) for the inner one —
+      never the other way round. A gradient vector is the special case
+      \(\nabla_x(h\circ g)=J_g(x)^\top\nabla_h\,h(g(x))\).
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Let \(g(x,y)=(x^2,xy)\) and \(f(u,v)=(u+v,uv)\), evaluated at
+      \(x=(1,2)\). Then \(g(1,2)=(1,2)\) and
+    </p>
+
+    \[ J_g(1,2)=\begin{bmatrix}2x&0\\y&x\end{bmatrix}=\begin{bmatrix}2&0\\2&1\end{bmatrix},
+       \qquad J_f(1,2)=\begin{bmatrix}1&1\\v&u\end{bmatrix}=\begin{bmatrix}1&1\\2&1\end{bmatrix} \]
+
+    <p>
+      Multiplying in composition order:
+    </p>
+
+    \[ J_{f\circ g}=\begin{bmatrix}1&1\\2&1\end{bmatrix}
+       \begin{bmatrix}2&0\\2&1\end{bmatrix}
+       = \begin{bmatrix}4&1\\6&1\end{bmatrix} \]
+
+    <p>
+      Check by direct substitution: \(f(g(x,y))=(x^2+xy,\;x^3y)\), whose derivative with respect
+      to \(x\) is \((2x+y,\;3x^2y)=(4,6)\) at \((1,2)\) — exactly the first column of the product.
+      Its derivative with respect to \(y\) is \((x,\;x^3)=(1,1)\), the second column. Writing the
+      shapes beside each factor turns this into a two-minute check.
+    </p>
+
+    <p>
+      <strong>Unit square.</strong> A matrix \(J=\begin{bmatrix}4&1\\10&2\end{bmatrix}\) sends the
+      corners \((0,0),(1,0),(0,1),(1,1)\) to \((0,0),(4,10),(1,2),(5,12)\): the square becomes a
+      parallelogram of area \(|\det J|=|4\cdot2-1\cdot10|=2\). The lab below draws this map for
+      several small compositions.
+    </p>
+
+    <h3 id="info">3 · Entropy, KL and cross-entropy</h3>
+
+    \[ H(p)=-\sum_i p_i\ln p_i,\qquad
+       D_{\mathrm{KL}}(p\Vert q)=\sum_i p_i\ln\frac{p_i}{q_i},\qquad
+       \mathrm{CE}(p,q)=H(p)+D_{\mathrm{KL}}(p\Vert q)=-\sum_i p_i\ln q_i \]
+
+    <p>
+      \(p\) is the true or target distribution, \(q\) the model's distribution, and all logs are
+      natural (nats). \(H(p)\ge0\), \(D_{\mathrm{KL}}(p\Vert q)\ge0\), with equality iff
+      \(p=q\); KL is <em>not</em> symmetric.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With \(p=(0.5,0.5)\) and \(q=(0.75,0.25)\):
+      \(H(p)=-2(0.5\ln0.5)=\ln2=0.6931\). Then
+      \(D_{\mathrm{KL}}(p\Vert q)=0.5\ln(0.5/0.75)+0.5\ln(0.5/0.25)
+      =0.5(-0.4055)+0.5(0.6931)=0.1438\).
+      So \(\mathrm{CE}=0.6931+0.1438=0.8369\), which also equals
+      \(-0.5\ln0.75-0.5\ln0.25=0.1438+0.6931\). Reversing the arguments gives
+      \(D_{\mathrm{KL}}(q\Vert p)=0.75\ln1.5+0.25\ln0.5=0.3041-0.1733=0.1308\neq0.1438\).
+    </p>
+
+    <h3 id="softmax">4 · Softmax Jacobian</h3>
+
+    \[ p=\mathrm{softmax}(z),\qquad
+       \frac{\partial p_i}{\partial z_j}=p_i(\delta_{ij}-p_j)
+       \quad\Longrightarrow\quad J=p(\mathbf{1}-p)^\top\ \text{on the diagonal adjustments} \]
+
+    <p>
+      \(z\) is the vector of logits, \(p\) the probabilities, and \(\delta_{ij}=1\) when \(i=j\)
+      and \(0\) otherwise. The full Jacobian is \(\operatorname{diag}(p)-pp^\top\). Its rows sum
+      to zero because the probabilities sum to one.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With \(p=(0.6,0.3,0.1)\):
+      \(\partial p_1/\partial z_1=0.6(1-0.6)=0.24\);
+      \(\partial p_1/\partial z_2=0.6(0-0.3)=-0.18\);
+      \(\partial p_2/\partial z_2=0.3(1-0.3)=0.21\).
+      Row 1 sums to \(0.24-0.18-0.06=0\), as required. Combined with cross-entropy,
+      \(\partial\mathcal L/\partial z=p-y\), the coupling disappears in the fused gradient.
+    </p>
+
+    <h3 id="bn">5 · Batch-norm Jacobian (sketch)</h3>
+
+    \[ \hat x_i=\frac{x_i-\mu_B}{\sqrt{\sigma_B^2+\epsilon}},\qquad
+       \frac{\partial \hat x_i}{\partial x_j}
+       =\frac{1}{\sqrt{\sigma_B^2+\epsilon}}\left(\delta_{ij}-\frac{1}{N}-\frac{\hat x_i\hat x_j}{N}\right) \]
+
+    <p>
+      \(N\) is the batch size, \(\mu_B,\sigma_B^2\) its mean and variance, and \(\hat x_i\) a
+      normalised activation. With learnable scale \(\gamma\), multiply the matrix by \(\gamma\).
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> One channel, \(N=2\), \(x=(1,3)\), \(\mu_B=2\),
+      \(\sigma_B=1\), \(\gamma=1\), so \(\hat x=(-1,1)\). Then
+      \(\partial\hat x_1/\partial x_1=1-1/2-((-1)(-1))/2=0\) and
+      \(\partial\hat x_1/\partial x_2=0-1/2-((-1)(1))/2=0\). Normalising two numbers to
+      \((-1,1)\) makes the result invariant to their common shift and scale — a useful sanity check
+      on any BN backward implementation.
+    </p>
+
+    <h3 id="attention">6 · Attention shapes</h3>
+
+    \[ \mathrm{Attention}(Q,K,V)=\mathrm{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V \]
+
+    <p>
+      \(Q,K,V\in\mathbb{R}^{N\times H_{\text{heads}}\times T\times d_k}\), with batch \(N\),
+      heads \(H_{\text{heads}}\), sequence length \(T\) and key width \(d_k=D/H_{\text{heads}}\).
+      Scores have shape \((N,H_{\text{heads}},T,T)\) and softmax is over the last axis.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With \(N=2\), \(H_{\text{heads}}=4\), \(T=16\), \(d_k=8\):
+      \(Q\) is \((2,4,16,8)\), \(K^\top\) is \((2,4,8,16)\), and \(QK^\top\) is \((2,4,16,16)\),
+      i.e. \(2\cdot4\cdot16\cdot16=2048\) score entries. Multiplying by \(V\;(2,4,16,8)\) gives
+      \((2,4,16,8)\); concatenating heads yields \((2,16,32)\).
+    </p>
+
+    <h2 id="lab">Lab: compose two maps and watch a unit square deform</h2>
+
+    <p>
+      Choose an inner map \(g\), an outer map \(f\), and the point where you evaluate the
+      derivative. The widget multiplies the two \(2\times2\) Jacobians in the correct order and
+      applies that product to the unit square. Every number shown is computed from the chosen
+      functions.
+    </p>
+
+    <section class="lab" data-widget="m6-06-jacobian" data-badge="exact"
+             data-title="Jacobian chain rule on a unit square"
+             data-note="Exact: both 2×2 Jacobians, their product, the determinant and the deformed square are computed from the chosen functions at the chosen point.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Reference, not code</h2>
+
+    <p>
+      This is a lookup page. There is no code listing here: the formulas above are the ones used by
+      the implementations in M0–M5, and the lab computes the derivative directly so you can check
+      any identity against numbers. Use the cheat sheet below when writing a backward pass by hand.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Transposing in the chain rule</p>
+        <p>
+          For a vector gradient use \(J_g^\top\nabla h\), not \(J_g\nabla h\). The shapes often
+          still line up for square Jacobians, which is why this bug hides.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Reversing the Jacobian product</p>
+        <p>
+          \(J_{f\circ g}=J_f J_g\): the function applied last goes on the left. Matrix products do
+          not commute, so order is a correctness issue.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Confusing KL directions</p>
+        <p>
+          \(D_{\mathrm{KL}}(p\Vert q)\neq D_{\mathrm{KL}}(q\Vert p)\): with \(p=(0.5,0.5)\),
+          \(q=(0.75,0.25)\) the values are \(0.1438\) and \(0.1308\).
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">CE is not entropy</p>
+        <p>
+          \(\mathrm{CE}=H(p)+D_{\mathrm{KL}}(p\Vert q)\). For a one-hot target \(H(p)=0\), but for a
+          soft target the entropy term does not vanish.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A hand-written backward pass for \(f(g(x))\) has the right shapes but wrong numbers. The
+      code multiplies \(J_g J_f\) and calls the result \(\partial f/\partial x\).
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The product is reversed. Since \(g\) is applied first and \(f\) second,
+        \(\partial(f\circ g)/\partial x=J_f(g(x))\,J_g(x)\); the outer Jacobian must be evaluated at
+        \(g(x)\) and placed on the left. Square matrices make the wrong product shape-compatible,
+        so a shape print will not catch it. Verify with a finite-difference check on one component.
+      </p>
+      <p class="small muted">
+        If the Jacobian is not square, the wrong order usually throws a shape error — which is the
+        lucky case. Always write the shapes of both factors in a comment.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m6-06">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — math cheatsheets",
+        "questions": [
+          {
+            "q": "For f(x) = xᵀAx with A = [[1,2],[0,3]] and x = (1,2), the gradient is…",
+            "options": ["(6, 14)", "(5, 6)", "(2, 6)", "(4, 12)"],
+            "correct": 0,
+            "why": ["Correct: (A+Aᵀ)x = [[2,2],[2,6]](1,2) = (6,14).", "That is Ax, not the gradient.", "That misses the contribution of x₂ to the first component.", "That differentiates only the diagonal terms."]
+          },
+          {
+            "q": "If g is applied first and f second, the composed Jacobian is…",
+            "options": ["J_g J_f", "J_f J_g", "J_gᵀ J_f", "J_f + J_g"],
+            "correct": 1,
+            "why": ["That reverses composition order.", "Correct: the outer Jacobian is on the left, evaluated at g(x).", "The transpose belongs to vector-gradient conversion, not here.", "Derivatives compose by multiplication, not addition."]
+          },
+          {
+            "q": "A 2×2 Jacobian [[4,1],[10,2]] scales the area of the unit square by…",
+            "options": ["2", "18", "8", "10"],
+            "correct": 0,
+            "why": ["Correct: |det J| = |8−10| = 2.", "That is the sum of entries.", "That is one diagonal product.", "That is one off-diagonal entry."]
+          },
+          {
+            "q": "With p = (0.5,0.5) and q = (0.75,0.25), D_KL(p||q) is…",
+            "options": ["0.1308", "0.1438", "0", "0.6931"],
+            "correct": 1,
+            "why": ["That is D_KL(q||p), demonstrating asymmetry.", "Correct: 0.5 ln(2/3)+0.5 ln 2 = 0.1438.", "The distributions differ, so KL is positive.", "That is H(p), the entropy."]
+          },
+          {
+            "q": "For softmax probabilities p = (0.6,0.3,0.1), ∂p₁/∂z₂ is…",
+            "options": ["0.24", "−0.18", "0", "−0.06"],
+            "correct": 1,
+            "why": ["That is the diagonal entry ∂p₁/∂z₁.", "Correct: p₁(0−p₂) = 0.6×(−0.3) = −0.18.", "Softmax couples all logits; off-diagonals are nonzero.", "That is ∂p₃/∂z₂."]
+          },
+          {
+            "q": "For a one-hot target y, the cross-entropy H(p,y) equals…",
+            "options": ["H(y)", "D_KL(y||p)", "0", "ln C"],
+            "correct": 1,
+            "why": ["The target entropy is zero, not the cross-entropy.", "Correct: CE = H(y) + D_KL(y||p) = D_KL(y||p).", "Cross-entropy is not zero unless prediction is exact.", "ln C is the expected CE at init, not the identity."]
+          },
+          {
+            "q": "Q of shape (2,4,16,8) and Kᵀ of shape (2,4,8,16) produce scores of shape…",
+            "options": ["(2,4,16,16)", "(2,4,8,8)", "(2,4,16,8)", "(2,16,4,16)"],
+            "correct": 0,
+            "why": ["Correct: the last two dims multiply, 16×16.", "That would require contracting the sequence dimension.", "That is the shape of V, not the scores.", "Heads and sequence were transposed."]
+          },
+          {
+            "q": "For N=2, x=(1,3), σ=1 and γ=1, the batch-norm Jacobian ∂x̂ᵢ/∂xⱼ is…",
+            "options": ["identity", "zero", "diag(−1,1)", "all ones"],
+            "correct": 1,
+            "why": ["BN removes common shift and scale, so it is not identity here.", "Correct: with two points the normalised output is always (−1,1), so local derivatives vanish.", "That is the output x̂, not the Jacobian.", "All ones would ignore normalisation."]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Denominator-layout identities: \(\partial(a^\top x)/\partial x=a\), \(\partial(x^\top Ax)/\partial x=(A+A^\top)x\), \(\partial\operatorname{tr}(AB)/\partial A=B^\top\).<br>
+        2 · Composition multiplies Jacobians as \(J_f J_g\): \([[1,1],[2,1]][[2,0],[2,1]]=[[4,1],[6,1]]\).<br>
+        3 · \(\mathrm{CE}=H(p)+D_{\mathrm{KL}}(p\Vert q)\), softmax \(J=\operatorname{diag}(p)-pp^\top\), attention scores \((N,H,T,T)\).
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m6-06">
+      <h2>Cheat sheet — M6·06</h2>
+      <ul>
+        <li>\(\partial(a^\top x)/\partial x=a\); \(\partial(x^\top Ax)/\partial x=(A+A^\top)x\); \(\partial\lVert x\rVert^2/\partial x=2x\).</li>
+        <li>\(J_{f\circ g}=J_f(g(x))J_g(x)\); vector chain rule \(J_g^\top\nabla h\); area scales by \(|\det J|\).</li>
+        <li>\(H(p)=-\sum p\ln p\); \(D_{\mathrm{KL}}(p\Vert q)=\sum p\ln(p/q)\); \(\mathrm{CE}=H+D_{\mathrm{KL}}\).</li>
+        <li>Softmax: \(\partial p_i/\partial z_j=p_i(\delta_{ij}-p_j)\); \(J=\operatorname{diag}(p)-pp^\top\).</li>
+        <li>Attention: \((N,H,T,d_k)\times(N,H,d_k,T)\to(N,H,T,T)\); softmax over last axis.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Bahdanau, D. — <em>Neural Machine Translation by Jointly Learning to Align and Translate</em> (2015).</li>
+      <li>Ioffe, S. — <em>Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift</em> (2015).</li>
+      <li>Vaswani, A. — <em>Attention Is All You Need</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m6-05-debugging-playbook.html">← Previous: debugging playbook</a>
+      <a href="m6-07-glossary-and-interviews.html">Next: glossary and interviews →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M6 Advanced toolkit</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m6-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

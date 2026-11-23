@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transfer learning and Grad-CAM · DeepLearn Lab</title>
+<meta name="description" content="Choose a freeze strategy from dataset size and similarity, train with differential learning rates, and compute a Grad-CAM heatmap from real gradients.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m1" data-lesson="m1-08" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="index.html" aria-current="page">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 1 · CNNs</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M1 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m1-08">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M1 CNNs</a> / <span>Transfer & Grad-CAM</span>
+    </nav>
+
+    <h1>Transfer learning and Grad-CAM</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 8 of 8 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">Pretrained filters are a reusable feature extractor. Fine-tune them carefully — and when the model makes a prediction, Grad-CAM can tell you which spatial region drove it.</p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+          <li>Choose freeze/unfreeze from dataset size × similarity to the source task.</li>
+          <li>Implement a head swap and parameter groups with different learning rates.</li>
+          <li>Compute Grad-CAM weights alpha_k and the localisation map from gradients.</li>
+          <li>Explain when pretraining hurts and how Grad-CAM differs from plain saliency.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>In ML you would reuse engineered features and refit only the final estimator. Here the learned conv filters are the features: keep them fixed for small datasets, or nudge them with a much smaller learning rate when the new task has enough examples.</p>
+    </aside>
+
+    <h2 id="intuition">Intuition: reuse the filters, replace the head</h2>
+
+    <p>
+      Early filters trained on a large image corpus detect generic edges and textures; later
+      filters become more task specific. A small, similar dataset is best served by freezing the
+      backbone and training a new head. A large, dissimilar dataset benefits from fine-tuning
+      more layers. A small, dissimilar dataset is the hard case: pretrained features may be
+      misleading, so try both and validate.
+    </p>
+    <p>
+      Grad-CAM answers “where did the model look?” For a chosen class \(c\), it weights each
+      feature map \(A^k\) by how much a global measure of that map affects the class score. It uses
+      gradients flowing into the final conv layer, so it is more class-specific and spatially
+      coherent than a raw input-gradient saliency map.
+    </p>
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols</p>
+      <p>\(A^k\): feature map of channel \(k\), with \(Z=H W\) positions ·
+      \(y^c\): logit for class \(c\) · \(\alpha_k\): Grad-CAM weight for channel \(k\) ·
+      \(L^c\): localisation map · \(\eta\): learning rate.</p>
+    </div>
+    <div class="table-wrap">
+    <table class="shape-table">
+      <caption>Qualitative freeze strategy (dataset size × similarity)</caption>
+      <thead><tr><th></th><th>similar to source task</th><th>dissimilar from source task</th></tr></thead>
+      <tbody>
+        <tr><td>small dataset</td><td>freeze backbone, train head</td><td>try frozen and partial fine-tuning; validate</td></tr>
+        <tr><td>large dataset</td><td>fine-tune last block, then more</td><td>fine-tune most layers with low LRs</td></tr>
+      </tbody>
+    </table>
+    </div>
+    
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="gradcam">1 · Grad-CAM weights</h3>
+    \[ \alpha_k = \frac{1}{Z}\sum_{i,j}\frac{\partial y^c}{\partial A^k_{ij}}, \qquad
+       L^c = \mathrm{ReLU}\!\left(\sum_k \alpha_k A^k\right), \qquad Z = HW \]
+    <p>
+      Worked with \(Z=9\) (two 3×3 maps). Let \(A^1\) be all ones and its gradient have a single 1
+      at the centre: \(\alpha_1=1/9\approx0.1111\). Let \(A^2\) have a single 1 at the centre and
+      its gradient be all ones: \(\alpha_2=9/9=1\). Then \(\alpha_1A^1+\alpha_2A^2\) is 0.1111 at
+      the eight outer cells and \(0.1111+1=1.1111\) at the centre. ReLU leaves these unchanged;
+      dividing by the maximum gives a map with 0.1 on the border and 1.0 at the centre — a
+      localised explanation.
+    </p>
+
+    <h3 id="difflr">2 · Differential learning rates</h3>
+    <p>
+      Group parameters so the backbone takes a small step and the new head a larger one:
+      \(\eta_{\text{head}}=10\times\eta_{\text{backbone}}\) is a common starting point.
+      Worked: \(\eta_{\text{backbone}}=10^{-4}\) gives \(\eta_{\text{head}}=10^{-3}\).
+      With AdamW, weight decay is usually applied to conv weights but not to BN parameters or biases.
+    </p>
+
+    <h3 id="hooks">3 · How the hook gathers gradients</h3>
+    <p>
+      Register a forward hook on the target conv layer to store its output \(A\). Register a
+      backward hook to store \(\partial y^c/\partial A\). Global-average the latter over \(i,j\)
+      to get \(\alpha_k\), multiply by \(A^k\), sum over \(k\), then apply ReLU and normalise to
+      \([0,1]\). The result has the spatial size of \(A\), not of the input image, so it is
+      upsampled for display.
+    </p>
+    
+
+    <h2 id="lab">Hands-on labs</h2>
+    <p class="small muted">Every number below is computed in your browser from the inputs you can change.</p>
+<section class="lab" data-widget="m1-08-gradcam" data-badge="exact"
+         data-title="Grad-CAM on a drawn shape"
+         data-note="Exact: feature maps, class logits and their gradients are computed in the browser from the drawn pixels; the heatmap is ReLU(Σ α_k A^k).">
+  <div class="lab__body"></div>
+</section>
+
+    <h2 id="code">Code</h2>
+<div class="tabs" data-tabs>
+  <div class="tabs__list" role="tablist">
+    <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+    <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+  </div>
+  <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+from torchvision import models
+
+net = models.resnet18(weights=None)      # no download in this offline course
+# net = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)  # real pretrained path
+net.fc = nn.Linear(net.fc.in_features, 10)   # head swap: (N,512) -&gt; (N,10)
+
+# Freeze the backbone, train the head
+for p in net.parameters(): p.requires_grad_(False)
+for p in net.fc.parameters(): p.requires_grad_(True)
+
+head_lr, body_lr = 1e-3, 1e-4
+opt = torch.optim.AdamW([
+    {"params": [p for n, p in net.named_parameters() if n.startswith("fc")], "lr": head_lr},
+    {"params": [p for n, p in net.named_parameters() if n.startswith("layer4") and p.requires_grad],
+     "lr": body_lr},
+], weight_decay=1e-4)
+
+# To fine-tune layer4: unfreeze it, keep earlier layers frozen.
+for n, p in net.named_parameters():
+    if n.startswith("layer4"): p.requires_grad_(True)
+net.eval()   # BatchNorm uses running statistics while the backbone is frozen
+
+# ---- Grad-CAM hooks on the last conv stage ----
+acts, grads = {}, {}
+def fwd_hook(module, inp, out): acts["A"] = out.detach()   # (N,512,7,7)
+def bwd_hook(module, gin, gout): grads["g"] = gout[0]       # (N,512,7,7)
+h1 = net.layer4.register_forward_hook(fwd_hook)
+h2 = net.layer4.register_full_backward_hook(bwd_hook)
+
+x = torch.randn(1, 3, 224, 224)           # (N,C,H,W)
+score = net(x)[0, 3]                       # class c = 3
+net.zero_grad(); score.backward()
+A, g = acts["A"], grads["g"]               # (1,512,7,7)
+alpha = g.mean(dim=(2, 3), keepdim=True)    # (1,512,1,1)
+cam = torch.relu((alpha * A).sum(dim=1))   # (1,7,7)
+cam = cam / cam.max().clamp_min(1e-9)
+h1.remove(); h2.remove()
+print(cam.shape)</code></pre>
+  </div>
+  <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+
+base = tf.keras.applications.ResNet50(weights=None, include_top=False,
+                                      input_shape=(224, 224, 3))  # no download
+# weights="imagenet" is the real pretrained path (skipped offline)
+base.trainable = False                      # feature extraction
+
+inputs = tf.keras.Input((224, 224, 3))
+x = tf.keras.applications.resnet.preprocess_input(inputs)
+x = base(x, training=False)                 # (N, 7, 7, 2048) NHWC
+x = tf.keras.layers.GlobalAveragePooling2D()(x)   # (N, 2048)
+outputs = tf.keras.layers.Dense(10)(x)            # (N, 10) logits
+model = tf.keras.Model(inputs, outputs)
+model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),
+              loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True))
+
+# Fine-tune the last stage with a 10x smaller learning rate
+base.trainable = True
+for layer in base.layers[:-20]: layer.trainable = False
+model.compile(optimizer=tf.keras.optimizers.Adam(1e-4),
+              loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True))
+
+# Grad-CAM: gradient of class score w.r.t. the last conv output
+last = base.get_layer("conv5_block3_out")
+cam_model = tf.keras.Model(model.inputs, [last.output, model.outputs[0]])
+with tf.GradientTape() as tape:
+    A, logits = cam_model(tf.random.normal((1, 224, 224, 3)))
+    score = logits[:, 3]
+grad = tape.gradient(score, A)              # (1,7,7,2048)
+alpha = tf.reduce_mean(grad, axis=(1, 2))   # (1,2048)
+cam = tf.nn.relu(tf.reduce_sum(alpha[:, None, None, :] * A, axis=-1))  # (1,7,7)
+cam = cam / tf.reduce_max(cam)</code></pre>
+  </div>
+</div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">BN left in train mode while frozen</p>
+        <p>Calling model.train() updates BatchNorm running statistics from the new, possibly tiny dataset. Keep eval mode for a frozen backbone or freeze BN statistics explicitly.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">High LR on pretrained weights</p>
+        <p>A learning rate of 0.1 can destroy features that took a large corpus to learn. Use a small backbone LR and a larger head LR, then unfreeze gradually.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Wrong normalisation statistics</p>
+        <p>Pretrained backbones expect their own per-channel mean/std. Feeding images normalised with a different dataset's statistics degrades features before training starts.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Grad-CAM without ReLU or normalisation</p>
+        <p>Negative evidence can cancel positive regions; ReLU keeps class-relevant evidence and dividing by the maximum makes the heatmap comparable across examples.</p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+    <p>
+      A reader fine-tunes a pretrained network with <code>lr=0.1</code> on 500 images and accuracy
+      collapses below the frozen-baseline result within one epoch.
+    </p>
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The learning rate is far too high for borrowed weights. Start with a frozen backbone and a
+        head LR around \(10^{-3}\), then unfreeze the last block with a backbone LR around
+        \(10^{-4}\) — a factor of ten smaller. Verify that preprocessing uses the source model's
+        mean/std and that BatchNorm is in eval mode while frozen.
+      </p>
+      <p class="small muted">Also check the head: the original classifier (1000 classes) must be
+      replaced by one matching the new class count, otherwise the output dimensions are wrong.</p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+    <section class="quiz" data-quiz="m1-08">
+      <script type="application/json" class="quiz__data">
+{
+  "title": "Check yourself — Transfer & Grad-CAM",
+  "questions": [
+    {
+      "q": "Small dataset, similar to source task — best first strategy:",
+      "options": [
+        "Fine-tune every layer at high LR",
+        "Freeze the backbone and train a new head",
+        "Train from random init",
+        "Remove all pooling"
+      ],
+      "correct": 1,
+      "why": [
+        "Too aggressive for scarce data.",
+        "Correct: pretrained features already fit well.",
+        "Wastes useful features.",
+        "Unrelated to transfer."
+      ]
+    },
+    {
+      "q": "With head LR 1e-3 and a ten-fold differential, backbone LR is:",
+      "options": [
+        "1e-2",
+        "1e-3",
+        "1e-4",
+        "1e-5"
+      ],
+      "correct": 2,
+      "why": [
+        "That is ten times larger, not smaller.",
+        "That gives no differential.",
+        "Correct: 1e-3 / 10 = 1e-4.",
+        "That is a hundred-fold difference."
+      ]
+    },
+    {
+      "q": "For the worked Grad-CAM example, alpha_1 (A1 all ones, single 1 in its gradient) is:",
+      "options": [
+        "1",
+        "9",
+        "1/9",
+        "0"
+      ],
+      "correct": 2,
+      "why": [
+        "That is alpha_2.",
+        "That is the sum before dividing by Z.",
+        "Correct: 1/9 ≈ 0.1111 since Z=9.",
+        "The gradient is not zero."
+      ]
+    },
+    {
+      "q": "Grad-CAM's final ReLU does what?",
+      "options": [
+        "Upsamples the map",
+        "Keeps positive evidence for the class",
+        "Normalises weights to sum to 1",
+        "Computes the gradient"
+      ],
+      "correct": 1,
+      "why": [
+        "Upsampling is a display step.",
+        "Correct: negative contributions are dropped.",
+        "Normalisation is a separate max division.",
+        "Gradients come from the backward hook."
+      ]
+    },
+    {
+      "q": "While a frozen backbone is used, BatchNorm should be:",
+      "options": [
+        "In train mode to adapt to new data",
+        "In eval mode using running statistics",
+        "Removed",
+        "Given a new learning rate"
+      ],
+      "correct": 1,
+      "why": [
+        "Training updates running stats from a small new dataset.",
+        "Correct: eval mode keeps source statistics fixed.",
+        "Removing BN changes the function.",
+        "BN statistics are not learned by SGD."
+      ]
+    },
+    {
+      "q": "Grad-CAM differs from input-gradient saliency because it:",
+      "options": [
+        "Uses feature maps from a chosen layer weighted by class gradients",
+        "Always works on the input pixels only",
+        "Requires no backward pass",
+        "Ignores the class index"
+      ],
+      "correct": 0,
+      "why": [
+        "Correct: class-specific weights on feature maps.",
+        "Saliency works on input pixels; Grad-CAM uses a conv layer's maps.",
+        "A backward pass supplies alpha_k.",
+        "The class logit y^c is central."
+      ]
+    },
+    {
+      "q": "Replacing ResNet-18's 1000-class head for a 10-class task gives a head of shape:",
+      "options": [
+        "(1000,10)",
+        "(512,10)",
+        "(512,1000)",
+        "(10,512)"
+      ],
+      "correct": 1,
+      "why": [
+        "Wrong input width.",
+        "Correct: GAP leaves 512 features, then Linear(512,10).",
+        "That is the original head.",
+        "Weights are (out,in) in some libraries but Linear stores (out,in); count is 5120+10."
+      ]
+    },
+    {
+      "q": "When might a pretrained model hurt?",
+      "options": [
+        "Large dataset similar to source",
+        "Small dataset very unlike source",
+        "Any dataset with three channels",
+        "Only when using AdamW"
+      ],
+      "correct": 1,
+      "why": [
+        "Pretraining usually helps.",
+        "Correct: mismatched features can mislead; compare against training from scratch.",
+        "Three channels are normal.",
+        "Optimizer choice is not the issue."
+      ]
+    }
+  ]
+}
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+    <div class="keyidea">
+      <p>
+1 · Freeze strategy follows dataset size × similarity: frozen head for small/similar data, gradual fine-tuning with low LRs for large or dissimilar data.<br>
+2 · Differential LRs and a new head let borrowed features adapt without being destroyed (head 1e-3, backbone 1e-4 in the worked example).<br>
+3 · Grad-CAM computes alpha_k = mean gradient of y^c over each feature map, then L^c = ReLU(Σ alpha_k A^k) — the worked 3×3 example gives 0.1 on the border and 1.0 at the centre.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m1-08">
+      <h2>Cheat sheet — M1·08</h2>
+      <ul>
+          <li>\(\alpha_k=\frac{1}{HW}\sum_{i,j}\partial y^c/\partial A^k_{ij}\).</li>
+          <li>\(L^c=\mathrm{ReLU}(\sum_k\alpha_k A^k)\), then divide by \(\max L^c\).</li>
+          <li>Worked: \(\alpha_1=1/9,\alpha_2=1\Rightarrow\) border 0.1, centre 1.0.</li>
+          <li>Head swap: ResNet-18 GAP → 512 features → Linear(512, n_classes).</li>
+          <li>Differential LR: head \(10^{-3}\), frozen/late backbone \(10^{-4}\).</li>
+          <li>Frozen BatchNorm stays in eval mode; Grad-CAM needs forward + backward hooks.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+        <li>Donahue, J. — <em>DeCAF: A Deep Convolutional Activation Feature for Generic Visual Recognition</em> (2014).</li>
+        <li>Yosinski, J. — <em>How transferable are features in deep neural networks?</em> (2014).</li>
+        <li>Zeiler, M. — <em>Visualizing and Understanding Convolutional Networks</em> (2013).</li>
+        <li>Selvaraju, R. — <em>Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization</em> (2016).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m1-07-object-detection.html">← Previous: Object detection</a>
+      <a href="index.html">Module exam →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M1 CNNs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m1-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

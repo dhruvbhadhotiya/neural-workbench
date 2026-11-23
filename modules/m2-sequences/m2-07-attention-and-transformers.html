@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention and transformers · DeepLearn Lab</title>
+<meta name="description" content="Compute scaled dot-product attention by hand, verify real softmax weights in a heatmap, understand multi-head attention and sinusoidal positional encoding, and build a minimal encoder block.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m2" data-lesson="m2-07" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="index.html" aria-current="page">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 2 · Sequences &amp; NLP</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M2 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m2-07">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M2 Sequences &amp; NLP</a> / <span>Attention &amp; transformers</span>
+    </nav>
+
+    <h1>Attention and transformers: let every token look back</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 7 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      An RNN compresses the past into one vector. Attention keeps every token accessible and learns
+      how much to read from each one — with weights you can compute and display.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Compute scaled dot-product attention by hand for three tokens with \(d_k=2\).</li>
+        <li>Explain the roles of Q, K and V, multi-head attention and the causal mask.</li>
+        <li>Compute sinusoidal positional encodings and verify the relative-offset property.</li>
+        <li>Match a hand-written attention function to <code>nn.MultiheadAttention</code> and sketch an encoder block.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        A weighted average of features is familiar: \(\mathbf{z}=\sum_t \alpha_t \mathbf{v}_t\).
+        Attention simply <em>learns</em> the weights \(\alpha_t\) from the current query and all
+        keys, then uses them to mix values. The soft, differentiable lookup replaces a hard index.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: soft lookup over tokens</h2>
+
+    <p>
+      Think of a dictionary whose keys are compared to a query by dot product. A large dot product
+      means “relevant”. Softmax turns those scores into weights that sum to 1, and the output is the
+      weighted mixture of the values. Every position produces its own query, so each token decides
+      what to read. Crucially, all positions are computed in parallel: no sequential recurrence.
+    </p>
+
+    <p>
+      A decoder must not peek at the future. Its causal mask sets scores for later positions to
+      \(-\infty\) before the softmax, making their weights exactly zero.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Attention is content-based retrieval: scores from Q·Kᵀ, weights from a row softmax, output
+        from weights times V. Removing the sequence bottleneck costs \(O(T^2)\) pairwise scores.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="symbols">0 · Symbols</h3>
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <ul>
+        <li>\(Q\in\mathbb{R}^{T\times d_k}\): queries; \(K\in\mathbb{R}^{T\times d_k}\): keys; \(V\in\mathbb{R}^{T\times d_v}\): values; \(T\): sequence length.</li>
+        <li>\(d_k\): key/query width; \(H_{heads}\): number of heads; \(D\): model width; \(d_k = D/H_{heads}\).</li>
+        <li>\(\mathrm{pos}\): token position; \(i\): dimension-pair index; \(PE\): positional encoding matrix.</li>
+      </ul>
+    </aside>
+
+    <h3 id="attention">1 · Scaled dot-product attention</h3>
+
+    \[ \mathrm{Attention}(Q,K,V)=\mathrm{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V \]
+
+    <p>
+      <strong>Worked example.</strong> Let \(T=3\), \(d_k=2\), and
+      \(\mathbf{q}_1=(1,0),\mathbf{q}_2=(0,1),\mathbf{q}_3=(1,1)\) with the same three vectors as
+      keys. The unscored dot products are
+    </p>
+
+    \[ QK^\top=\begin{bmatrix}1&0&1\\0&1&1\\1&1&2\end{bmatrix},\qquad
+       \sqrt{d_k}=\sqrt2=1.4142,\qquad
+       S=\frac{QK^\top}{\sqrt2}=\begin{bmatrix}0.7071&0&0.7071\\0&0.7071&0.7071\\0.7071&0.7071&1.4142\end{bmatrix} \]
+
+    <p>
+      Row 1: \(e^{0.7071}=2.0281\), \(e^{0}=1\), so the sum is \(5.0562\) and the weights are
+      \((0.4011,\,0.1978,\,0.4011)\). Row 2 gives \((0.1978,\,0.4011,\,0.4011)\). Row 3 has sum
+      \(2.0281+2.0281+4.1133=8.1695\), so \((0.2483,\,0.2483,\,0.5035)\). Each row sums to 1;
+      multiplying by \(V\) produces one \(d_v\)-vector per query. Without the \(1/\sqrt{d_k}\)
+      scale, the logits are larger and the softmax saturates.
+    </p>
+
+    <section class="lab" data-widget="m2-07-attention-heatmap" data-badge="exact"
+             data-title="Attention heatmap with real softmax"
+             data-note="Exact: scores are QKᵀ/√d_k from hash-derived toy embeddings, weights come from DL.tensor.softmaxRows (or a per-row causal mask), and the context is A·V — all computed live.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="multihead">2 · Multi-head attention</h3>
+
+    \[ \mathrm{MultiHead}(Q,K,V)=\mathrm{Concat}(\mathrm{head}_1,\dots,\mathrm{head}_{H})\,W_O,
+       \qquad \mathrm{head}_h=\mathrm{Attention}(QW_Q^{(h)},KW_K^{(h)},VW_V^{(h)}) \]
+
+    <p>
+      Worked: \(D=8\), \(H_{heads}=4\) gives \(d_k=8/4=2\). Each head produces a \(T\times2\)
+      output; concatenating four heads restores \(T\times8\), and \(W_O\) mixes them. Heads can
+      specialize — one may track syntax, another coreference — but that is an empirical tendency,
+      not a guarantee. The score cost is \(O(T^2 d_k)\) per head, hence \(O(T^2 D)\) overall:
+      a 3-token sentence needs 9 scores (3 × 3), an 8-token one needs 64.
+    </p>
+
+    <h3 id="pe">3 · Positional encoding</h3>
+
+    \[ PE_{(\mathrm{pos},2i)}=\sin\!\left(\frac{\mathrm{pos}}{10000^{2i/D}}\right),\qquad
+       PE_{(\mathrm{pos},2i+1)}=\cos\!\left(\frac{\mathrm{pos}}{10000^{2i/D}}\right) \]
+
+    <p>
+      Worked for \(i=0\) (so \(\omega=1\)): \(PE(2)=(0.9093,-0.4161)\), \(PE(5)=(-0.9589,0.2837)\).
+      For a shift \(k=3\), the rotation matrix \(R'=\begin{bmatrix}\cos 3&\sin 3\\-\sin 3&\cos 3\end{bmatrix}
+      =\begin{bmatrix}-0.9900&0.1411\\-0.1411&-0.9900\end{bmatrix}\) gives
+      \(R'PE(2)=(-0.9900\cdot0.9093+0.1411(-0.4161),\ -0.1411\cdot0.9093-0.9900(-0.4161))
+      =(-0.9589,0.2837)=PE(5)\). Also \(PE(p)\cdot PE(p+3)=\cos 3=-0.9900\) for every \(p\):
+      the dot product depends only on the offset, which is how a relative position becomes visible.
+    </p>
+
+    <section class="lab" data-widget="m2-07-positional-encoding" data-badge="exact"
+             data-title="Positional encoding heatmap"
+             data-note="Exact: every sin/cos value, the rotation identity for offset k=3 and the offset-only dot products are computed from the displayed formulas.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="block">4 · Encoder and decoder blocks</h3>
+
+    <p>
+      An encoder block is <em>LayerNorm → multi-head self-attention → residual → LayerNorm →
+      feed-forward → residual</em>. A decoder block inserts a masked self-attention sublayer and a
+      cross-attention sublayer that queries the encoder output. Stacking \(L\) blocks gives a model
+      with no recurrence at all; position information comes only from \(PE\).
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      The hand-written function uses the library's own projection weights, so its output must match
+      <code>nn.MultiheadAttention</code> numerically. Then a minimal encoder block shows the residual
+      and LayerNorm order.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import math
+import torch
+from torch import nn
+
+torch.manual_seed(0)
+
+N, T, D, heads = 2, 4, 8, 2
+x = torch.randn(N, T, D)
+
+mha = nn.MultiheadAttention(embed_dim=D, num_heads=heads, batch_first=True)
+out, weights = mha(x, x, x, need_weights=True, average_attn_weights=True)
+print(out.shape, weights.shape)   # (2,4,8), (2,4,4)
+
+# Hand-written attention using exactly the library's projections.
+Wq, Wk, Wv = mha.in_proj_weight.chunk(3, dim=0)
+bq, bk, bv = mha.in_proj_bias.chunk(3, dim=0)
+Q, K, V = x @ Wq.T + bq, x @ Wk.T + bk, x @ Wv.T + bv
+dk = D // heads
+Qh = Q.view(N, T, heads, dk).transpose(1, 2)   # (N,H,T,dk)
+Kh = K.view(N, T, heads, dk).transpose(1, 2)
+Vh = V.view(N, T, heads, dk).transpose(1, 2)
+scores = (Qh @ Kh.transpose(-1, -2)) / math.sqrt(dk)
+A = scores.softmax(dim=-1)
+ctx = A @ Vh                                    # (N,H,T,dk)
+ctx = ctx.transpose(1, 2).reshape(N, T, D)
+manual = ctx @ mha.out_proj.weight.T + mha.out_proj.bias
+print("matches library:", torch.allclose(out, manual, atol=1e-6))
+print("weights sum to 1:", A.sum(dim=-1)[0, 0])
+
+class EncoderBlock(nn.Module):
+    def __init__(self, D, heads, ff=32):
+        super().__init__()
+        self.n1 = nn.LayerNorm(D)
+        self.att = nn.MultiheadAttention(D, heads, batch_first=True)
+        self.n2 = nn.LayerNorm(D)
+        self.ff = nn.Sequential(nn.Linear(D, ff), nn.GELU(), nn.Linear(ff, D))
+    def forward(self, x):
+        h = self.n1(x)
+        a, _ = self.att(h, h, h, need_weights=False)
+        x = x + a                         # residual around attention
+        h = self.n2(x)
+        return x + self.ff(h)             # residual around feed-forward
+
+block = EncoderBlock(D, heads)
+print("encoder output:", block(x).shape)         # (2, 4, 8)</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+import math
+
+tf.random.set_seed(0)
+
+N, T, D, heads = 2, 4, 8, 2
+x = tf.random.normal((N, T, D))
+
+att = tf.keras.layers.MultiHeadAttention(num_heads=heads, key_dim=D // heads)
+out, w = att(x, x, x, return_attention_scores=True)
+print(out.shape, w.shape)                 # (2,4,8), (2,2,4,4)
+
+# Sinusoidal positional encoding (shape (1,T,D) broadcasts over the batch).
+pos = tf.cast(tf.range(T)[:, None], tf.float32)
+i = tf.cast(tf.range(D // 2)[None, :], tf.float32)
+w = tf.pow(tf.constant(10000.0), -2.0 * i / D)
+pe = tf.concat([tf.sin(pos * w), tf.cos(pos * w)], axis=-1)
+print(pe.shape)                           # (1, 4, 8)
+x = x + pe
+
+def encoder_block(x, D, heads, ff=32):
+    h = tf.keras.layers.LayerNormalization()(x)
+    a = tf.keras.layers.MultiHeadAttention(heads, D // heads)(h, h)
+    x = x + a
+    h = tf.keras.layers.LayerNormalization()(x)
+    h = tf.keras.layers.Dense(ff, activation="gelu")(h)
+    return x + tf.keras.layers.Dense(D)(h)
+
+print(encoder_block(x, D, heads).shape)   # (2, 4, 8)
+
+# For a decoder, pass use_causal_mask=True to MultiHeadAttention.</code></pre>
+      </div>
+    </div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting the \(\sqrt{d_k}\) scale</p>
+        <p>
+          Large dot products push the softmax into a near one-hot distribution and kill gradients.
+          Divide by \(\sqrt{d_k}\), not by \(d_k\).
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Mask on the wrong axis</p>
+        <p>
+          Apply the causal mask to the key positions of each query row, before softmax. Masking
+          query rows or masking after softmax does not implement causality.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Mixing up add and concat</p>
+        <p>
+          Positional encoding is <em>added</em> to the token embedding so both have width \(D\);
+          the heads are <em>concatenated</em> before \(W_O\). Keep those two operations distinct.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">No causal mask in a decoder</p>
+        <p>
+          Self-attention in a decoder sees future tokens unless masked, which leaks the answer into
+          the prediction and makes generation invalid.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “my attention weights are exactly uniform, \(1/T\) everywhere, no matter
+      what the input is.”
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        Look at the mask first. A mask that marks <em>every</em> position as forbidden makes
+        <code>DL.tensor.softmax</code> return zeros; after any fallback normalization that looks
+        uniform. In PyTorch, filling <em>all</em> scores with <code>-inf</code> produces NaNs in
+        softmax. The causal mask must keep positions \(j\le t\) unmasked for query \(t\) —
+        mask only the strict future. The second candidate is a broken scale: dividing by a huge
+        number collapses all scores to zero, giving exactly uniform weights.
+      </p>
+      <p class="small muted">
+        Print one row of raw scores before softmax; it should contain finite, distinct numbers,
+        and exactly one unmasked position for \(t=0\) under a causal mask.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m2-07">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — attention and transformers",
+        "questions": [
+          {
+            "q": "In Attention(Q,K,V), what do Q, K and V represent?",
+            "options": [
+              "Queries are compared to keys; values are mixed by the resulting weights",
+              "Queries are labels; keys are weights; values are losses",
+              "Q is the input, K is the output, V is the mask",
+              "They are three copies of the positional encoding"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: scores QKᵀ decide how much of each value to read.",
+              "That confuses attention with supervised learning quantities.",
+              "The mask is separate from V.",
+              "Q/K/V are learned projections of the input, not PE copies."
+            ]
+          },
+          {
+            "q": "Why divide QKᵀ by √d_k?",
+            "options": [
+              "To make the matrix square",
+              "To keep logits in a range where softmax does not saturate",
+              "To remove the need for a softmax",
+              "To reduce the parameter count"
+            ],
+            "correct": 1,
+            "why": [
+              "QKᵀ is already T×T.",
+              "Correct: dot products grow with d_k, so scaling stabilizes gradients.",
+              "Softmax is still required.",
+              "Scaling introduces no parameters."
+            ]
+          },
+          {
+            "q": "For Q=K=((1,0),(0,1),(1,1)) and d_k=2, what is the scaled score S₂₃?",
+            "options": ["1", "0.7071", "0.5", "1.4142"],
+            "correct": 1,
+            "why": [
+              "That is the unscaled dot product.",
+              "Correct: q₂·k₃ = 1, divided by √2 = 0.7071.",
+              "That divides by d_k rather than √d_k.",
+              "That is the scale factor itself."
+            ]
+          },
+          {
+            "q": "With D=8 and H_heads=4, what is the width d_k of each head?",
+            "options": ["8", "4", "2", "32"],
+            "correct": 2,
+            "why": [
+              "That is the full model width.",
+              "That is the number of heads.",
+              "Correct: d_k = D/H = 8/4 = 2.",
+              "That multiplies instead of divides."
+            ]
+          },
+          {
+            "q": "What does a causal mask do in decoder self-attention?",
+            "options": [
+              "Sets weights for future key positions to zero before softmax",
+              "Removes the residual connection",
+              "Adds positional encoding",
+              "Drops every second layer"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: query t may attend only to keys j ≤ t.",
+              "Residuals are independent of masking.",
+              "PE is added to the embeddings, not via the mask.",
+              "That is unrelated."
+            ]
+          },
+          {
+            "q": "The dot product PE(p)·PE(p+k) for a sinusoidal pair depends on…",
+            "options": [
+              "p only", "k only", "both p and k equally", "the vocabulary size"
+            ],
+            "correct": 1,
+            "why": [
+              "The identity cos(kω) removes the dependence on p.",
+              "Correct: sin(pω)sin((p+k)ω)+cos(pω)cos((p+k)ω)=cos(kω).",
+              "That is exactly what the identity rules out.",
+              "Vocabulary size is unrelated."
+            ]
+          },
+          {
+            "q": "What is the score complexity of full self-attention in sequence length T?",
+            "options": ["O(T)", "O(T log T)", "O(T²)", "O(1)"],
+            "correct": 2,
+            "why": [
+              "There are pairwise token interactions, not just a linear scan.",
+              "That would require a special sparse pattern.",
+              "Correct: QKᵀ is a T×T matrix.",
+              "Clearly false for variable-length input."
+            ]
+          },
+          {
+            "q": "In the encoder block used here, which order is correct?",
+            "options": [
+              "Attention → LayerNorm → residual (no second norm)",
+              "LayerNorm → attention → residual → LayerNorm → FFN → residual",
+              "FFN → attention → dropout only",
+              "LayerNorm → FFN → attention without residuals"
+            ],
+            "correct": 1,
+            "why": [
+              "The block uses pre-norm and a second norm before the FFN.",
+              "Correct: each sublayer is preceded by LayerNorm and wrapped in a residual.",
+              "That is not an encoder block.",
+              "Residuals are essential for deep stacks."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Attention = softmax(QKᵀ/√d_k)·V; for q₂·k₃=1 and d_k=2 the scaled score is 0.7071.<br>
+        2 · Multi-head splits D into H heads of width d_k=D/H, concatenates, then applies W_O; cost is O(T²D).<br>
+        3 · Sinusoidal PE is added to embeddings and satisfies PE(p)·PE(p+k)=cos(kω); decoder attention needs a causal mask.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m2-07">
+      <h2>Cheat sheet — M2·07</h2>
+      <ul>
+        <li>\(\mathrm{Attention}(Q,K,V)=\mathrm{softmax}(QK^\top/\sqrt{d_k})V\); softmax is per query row.</li>
+        <li>Worked row 1: scores (0.7071, 0, 0.7071) → weights (0.4011, 0.1978, 0.4011).</li>
+        <li>\(d_k = D/H_{heads}\); D=8, H=4 → d_k=2; concatenate all heads then apply \(W_O\).</li>
+        <li>\(PE_{(p,2i)}=\sin(p/10000^{2i/D})\), odd dimensions use cos; added to embeddings.</li>
+        <li>Rotation identity: \(PE(p+k)=R'(k\omega)PE(p)\); dot product = cos(kω), worked −0.9900 for k=3, i=0.</li>
+        <li>Encoder block: LayerNorm → attention → residual → LayerNorm → FFN → residual.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Bahdanau, D. — <em>Neural Machine Translation by Jointly Learning to Align and Translate</em> (2014).</li>
+      <li>Vaswani, A. — <em>Attention Is All You Need</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m2-06-sentiment-lstm.html">← Sentiment LSTM</a>
+      <a href="index.html">Module overview →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M2 Sequences &amp; NLP</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m2-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

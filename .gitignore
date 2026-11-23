@@ -1,0 +1,17 @@
+# Internal authoring material — not part of the published site.
+docs/
+.opencode/
+
+# Local tooling and OS cruft.
+node_modules/
+__pycache__/
+*.py[cod]
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / temporary files.
+*.swp
+*~
+*.tmp

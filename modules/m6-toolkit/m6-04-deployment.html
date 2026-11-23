@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quantization and ONNX export · DeepLearn Lab</title>
+<meta name="description" content="Quantise a weight vector by hand, measure the exact error and size saving, and learn what parity checks a deployment needs.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m6" data-lesson="m6-04" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="index.html" aria-current="page">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 6 · Advanced toolkit</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M6 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m6-04">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M6 Advanced toolkit</a> / <span>Deployment</span>
+    </nav>
+
+    <h1>Quantization and ONNX export</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 4 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      A model in a notebook is not yet a product. Turn weights into small integers, measure the
+      error exactly, and check that an exported graph computes the same thing.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Apply the affine quantisation map \(q=\operatorname{round}(x/s)+z\) with real numbers.</li>
+        <li>State the error bound and explain when clipping breaks it.</li>
+        <li>Compute the memory saving from fp32 to INT8 for a known parameter count.</li>
+        <li>Describe PTQ versus QAT and the parity checks an ONNX export needs.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        Rounding a feature to two decimals in a spreadsheet was harmless. Rounding a million
+        trained weights to 8-bit integers changes the function the network computes. The question
+        is no longer "is it smaller?" but "how much error, where, and is the exported graph identical?"
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a ruler for weights</h2>
+
+    <p>
+      Quantisation is a change of ruler. Floating point puts precision where the value is; an
+      integer format uses fixed steps of size \(s\) across a chosen range. The step \(s\) is the
+      <em>scale</em>, and \(z\) is the <em>zero point</em>: the integer that represents exactly zero.
+      With \(z=0\) the format is symmetric (good for signed weights); with \(z\neq0\) it is affine
+      (good for non-negative activations such as ReLU outputs).
+    </p>
+
+    <p>
+      Post-training quantisation (PTQ) calibrates \(s\) and \(z\) on a small representative sample
+      after training. Quantisation-aware training (QAT) inserts fake-quantisation modules during
+      training so the weights adapt to the coarse grid. PTQ is minutes of work; QAT costs a full
+      training run but usually loses less accuracy.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Quantisation is lossy arithmetic, not compression of information for free. The scale
+        decides the resolution; clipping decides which large values are sacrificed.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="affine">1 · Quantise and dequantise</h3>
+
+    \[ q = \operatorname{clip}\!\left(\operatorname{round}\!\left(\frac{x}{s}\right)+z,\;
+          q_{\min},\,q_{\max}\right), \qquad \hat x = s\,(q-z) \]
+
+    <p>
+      \(x\) is the original float value, \(s&gt;0\) the scale (one quantisation step in real units),
+      \(z\) the integer zero point, \(q\) the stored integer and \(\hat x\) the dequantised value.
+      For \(b\)-bit signed weights \(q_{\min}=-2^{b-1}\), \(q_{\max}=2^{b-1}-1\); for unsigned
+      activations \(q_{\min}=0\), \(q_{\max}=2^b-1\). The notation \(\operatorname{clip}\) means
+      "clamp to the representable integer range".
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Take \(x=1.37\), \(s=0.02\), \(z=-128\), \(b=8\) with
+      \(q_{\min}=-128\), \(q_{\max}=127\). Then \(x/s=1.37/0.02=68.5\),
+      \(\operatorname{round}(68.5)=69\), and \(q=69-128=-59\), which is in range.
+      Dequantising: \(\hat x=0.02\,(-59-(-128))=0.02\cdot69=1.38\).
+      The error is \(x-\hat x=1.37-1.38=-0.01\), magnitude \(0.01\).
+    </p>
+
+    <h3 id="bound">2 · Error bound and calibration</h3>
+
+    \[ |x-\hat x| \le \frac{s}{2} \quad\text{when no clipping occurs.} \]
+
+    <p>
+      Rounding to the nearest integer changes \(x/s\) by at most \(1/2\), so multiplying back by
+      \(s\) gives the bound. Once clipping happens the error can be much larger: a value outside
+      \([s(q_{\min}-z),\;s(q_{\max}-z)]\) is simply replaced by the endpoint.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With \(s=0.02\), the bound is \(0.01\) — exactly the error
+      measured above. But \(x=-0.42\) with the same \(s,z\) gives \(x/s=-21\), \(q=-21-128=-149\),
+      which is below \(-128\), so it clips to \(-128\) and dequantises to
+      \(0.02\cdot0=0\): error \(0.42\), forty-two times the bound. Choosing \(s\) from the observed
+      range avoids this.
+    </p>
+
+    <p>
+      <strong>Calibration example.</strong> For unsigned 8-bit activations with observed range
+      \([-1,1]\): \(s=(1-(-1))/(255-0)=2/255=0.00784\) and
+      \(z=\operatorname{round}(0-(-1)/s)=\operatorname{round}(127.5)=128\). Dequantising \(q=255\)
+      gives \(0.00784(255-128)=0.996\), an endpoint error of \(0.004\).
+    </p>
+
+    <h3 id="size">3 · Size reduction</h3>
+
+    \[ R = \frac{\text{bytes}_{\text{fp32}}}{\text{bytes}_{\text{int}}}
+          = \frac{4}{b/8} = \frac{32}{b}, \qquad
+       \text{saving} = 1-\frac{b}{32} \]
+
+    <p>
+      \(b\) is the bit width and \(R\) the compression factor relative to fp32 storage.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> A layer with \(1{,}048{,}576\) weights uses
+      \(1{,}048{,}576\cdot4=4{,}194{,}304\) bytes (4 MiB) in fp32. At INT8 it uses
+      \(1{,}048{,}576\) bytes (1 MiB): \(R=32/8=4\), a saving of \(1-8/32=0.75\), i.e. 75%.
+      At 4 bits it uses 524,288 bytes (0.5 MiB), \(R=8\), saving 87.5%. Scales and zero points
+      add a tiny overhead (one per tensor or per channel).
+    </p>
+
+    <h2 id="lab">Lab: quantisation error on a real weight vector</h2>
+
+    <p>
+      Change any of the three weights, the bit width, the scale or the zero point. Each row is
+      recomputed with the formula above; the table marks clipped values, and the chart overlays the
+      original and reconstructed numbers. No error value is stored or simulated.
+    </p>
+
+    <section class="lab" data-widget="m6-04-quant-error" data-badge="exact"
+             data-title="Quantise a weight vector"
+             data-note="Exact: q = clip(round(x/s)+z), x-hat = s(q-z), all errors, byte counts and ratios are computed from your values.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Try setting \(s=0.02\), \(z=-128\), \(b=8\) and the first weight to \(1.37\): the table shows
+      \(q=-59\), \(\hat x=1.38\), error \(-0.01\). Then push the third weight below \(-2.56\) and
+      watch clipping break the \(s/2\) bound.
+    </p>
+
+    <h2 id="code">Code: PTQ, ONNX export and parity</h2>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+import numpy as np
+
+# ---- Post-training static INT8 quantisation --------------------------------
+model = nn.Sequential(nn.Conv2d(3, 16, 3, padding=1), nn.ReLU(),
+                      nn.Conv2d(16, 16, 3, padding=1), nn.ReLU(),
+                      nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(16, 10))
+model.eval()                                   # folds BN into conv, fixes behaviour
+
+model.qconfig = torch.ao.quantization.get_default_qconfig("x86")
+prepared = torch.ao.quantization.prepare(model)
+with torch.no_grad():
+    for x, _ in calib_loader:                   # ~100–500 representative samples
+        prepared(x)                             # collect activation ranges
+quantized = torch.ao.quantization.convert(prepared)
+with torch.inference_mode():
+    y_int8 = quantized(torch.randn(1, 3, 32, 32))   # (1, 10) logits
+
+# ---- ONNX export with a fixed, explicit batch dimension -------------------
+dummy = torch.randn(1, 3, 32, 32)
+torch.onnx.export(model, dummy, "model.onnx",
+                  input_names=["images"], output_names=["logits"],
+                  dynamic_axes={"images": {0: "batch"}, "logits": {0: "batch"}},
+                  opset_version=13)
+
+# ---- Parity check (requires onnxruntime in the deployment environment) -----
+import onnxruntime as ort
+sess = ort.InferenceSession("model.onnx", providers=["CPUExecutionProvider"])
+x = torch.randn(4, 3, 32, 32)
+with torch.no_grad():
+    y_torch = model(x).numpy()
+y_onnx = sess.run(["logits"], {"images": x.numpy()})[0]
+print("shapes", y_torch.shape, y_onnx.shape)
+print("max abs parity error", float(np.max(np.abs(y_torch - y_onnx))))</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      The parity number printed above is measured on your machine; it is not a fixed benchmark.
+      Compare it against the tolerance your application can tolerate, and repeat with several
+      batch sizes if the graph declares a dynamic axis.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Calibrating on too few samples</p>
+        <p>
+          A narrow calibration set produces a scale that clips real activations. Use representative
+          data, including the unusual but valid inputs you expect in production.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Exporting in train mode</p>
+        <p>
+          Dropout stays active and batch norm uses batch statistics, so ONNX and PyTorch disagree.
+          Call <code>model.eval()</code> before tracing and before the parity check.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Dynamic axes left implicit</p>
+        <p>
+          A graph traced at batch 1 may reject batch 8. Declare which axes are dynamic and test
+          each batch size you plan to serve.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Ignoring the opset</p>
+        <p>
+          Different opsets implement some operators differently. Pin the opset version and verify
+          parity after any runtime or exporter upgrade.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      The ONNX model's output differs from PyTorch by about 0.4 on the same input. The export
+      script calls <code>torch.onnx.export(model, dummy, ...)</code> and the model contains dropout
+      and batch norm. The exporter did not print an error.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The model was left in training mode. Dropout randomly zeroes activations during the trace,
+        and batch norm records batch statistics instead of using its running estimates; both
+        differences survive export. Call <code>model.eval()</code> before export and run the
+        PyTorch side of the parity check under <code>torch.no_grad()</code> in eval mode as well.
+      </p>
+      <p class="small muted">
+        If the gap remains, compare opset versions and check whether the runtime fused operators.
+        A constant small difference (around 1e-6 for fp32) is normal; 0.4 is a mode or data-order bug.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m6-04">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — deployment",
+        "questions": [
+          {
+            "q": "With x = 1.37, s = 0.02 and z = −128, what is the stored integer q?",
+            "options": ["−59", "69", "−69", "59"],
+            "correct": 0,
+            "why": ["Correct: round(1.37/0.02) = 69, then 69 − 128 = −59.", "That is round(x/s) before adding the zero point.", "That subtracts from the wrong sign.", "That ignores the zero point entirely."]
+          },
+          {
+            "q": "The dequantised value for q = −59, s = 0.02, z = −128 is…",
+            "options": ["1.37", "1.38", "−1.38", "0.02"],
+            "correct": 1,
+            "why": ["That is the original value, not the reconstruction.", "Correct: 0.02 × (−59 + 128) = 1.38.", "That flips the sign of the reconstruction.", "That is only the scale."]
+          },
+          {
+            "q": "Without clipping, a quantisation step of s = 0.02 gives what maximum absolute error?",
+            "options": ["0.02", "0.01", "0.04", "0.002"],
+            "correct": 1,
+            "why": ["That is the full step, not half of it.", "Correct: rounding error is at most s/2 = 0.01.", "That is twice the step.", "That uses the wrong decimal place."]
+          },
+          {
+            "q": "1,048,576 fp32 weights converted to INT8 occupy…",
+            "options": ["4 MiB", "2 MiB", "1 MiB", "0.5 MiB"],
+            "correct": 2,
+            "why": ["That is the fp32 size.", "That is the fp16 size.", "Correct: 1,048,576 × 1 byte = 1 MiB, a 4× reduction.", "That is the 4-bit size."]
+          },
+          {
+            "q": "What does zero point z represent?",
+            "options": ["The largest stored integer", "The integer that represents exactly zero", "The number of bits", "The calibration batch size"],
+            "correct": 1,
+            "why": ["That is q_max.", "Correct: dequantising z gives exactly zero.", "That is b.", "Batch size is unrelated to affine quantisation."]
+          },
+          {
+            "q": "Which statement about PTQ versus QAT is correct?",
+            "options": ["QAT needs no training data", "PTQ calibrates after training and is cheaper than QAT", "QAT never uses quantisation during training", "PTQ always beats QAT"],
+            "correct": 1,
+            "why": ["QAT is a training procedure and needs data.", "Correct: PTQ only calibrates scales on a sample; QAT retrains with fake quantisation.", "QAT explicitly simulates quantisation in training.", "QAT usually preserves more accuracy."]
+          },
+          {
+            "q": "Why call model.eval() before ONNX export?",
+            "options": ["It makes the file smaller", "It removes dropout randomness and uses running BN statistics", "It increases the opset version", "It disables dynamic axes"],
+            "correct": 1,
+            "why": ["Size is not the reason.", "Correct: train-mode behaviour would be baked into the graph.", "Opset is an export argument, not a model mode.", "Dynamic axes are set explicitly in export."]
+          },
+          {
+            "q": "A calibrated value clips to q_min. What happens to the error bound s/2?",
+            "options": ["It still holds", "It no longer holds; the error can be much larger", "It becomes zero", "It doubles exactly"],
+            "correct": 1,
+            "why": ["Clamping discards the excess, so the bound is void.", "Correct: a clipped value is replaced by an endpoint, possibly far from x.", "Rounding error is zero only by coincidence.", "There is no fixed doubling rule."]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Affine quantisation: \(q=\operatorname{clip}(\operatorname{round}(x/s)+z)\), \(\hat x=s(q-z)\); for \(x=1.37,s=0.02,z=-128\), \(q=-59,\hat x=1.38\).<br>
+        2 · Rounding error is at most \(s/2=0.01\) without clipping; clipping can make it far larger, so calibrate the range.<br>
+        3 · INT8 stores 1 byte per weight (4× smaller than fp32); export in eval mode and verify parity at each batch size.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m6-04">
+      <h2>Cheat sheet — M6·04</h2>
+      <ul>
+        <li>\(q=\operatorname{clip}(\operatorname{round}(x/s)+z)\), \(\hat x=s(q-z)\).</li>
+        <li>\(|x-\hat x|\le s/2\) unless clipping; signed \(q\in[-2^{b-1},2^{b-1}-1]\).</li>
+        <li>Calibration: \(s=(x_{\max}-x_{\min})/(q_{\max}-q_{\min})\), \(z=\operatorname{round}(q_{\min}-x_{\min}/s)\).</li>
+        <li>Compression \(R=32/b\): INT8 4×, INT4 8× versus fp32.</li>
+        <li>PTQ calibrates after training; QAT simulates quantisation during training. Export with <code>eval()</code>.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Jacob, B. — <em>Quantization and Training of Neural Networks for Efficient Integer-Arithmetic-Only Inference</em> (2018).</li>
+      <li>Krishnamoorthi, R. — <em>Quantizing Deep Convolutional Networks for Efficient Inference: A Whitepaper</em> (2018).</li>
+      <li>Han, S. — <em>Deep Compression: Compressing Deep Neural Networks with Pruning, Trained Quantization and Huffman Coding</em> (2016).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m6-03-interpretability.html">← Previous: interpretability</a>
+      <a href="m6-05-debugging-playbook.html">Next: debugging playbook →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M6 Advanced toolkit</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m6-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

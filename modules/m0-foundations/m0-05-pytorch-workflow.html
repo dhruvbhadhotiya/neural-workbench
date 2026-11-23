@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The PyTorch workflow · DeepLearn Lab</title>
+<meta name="description" content="Write a complete training loop from scratch: datasets, DataLoader, device, evaluation, checkpoints and a worked shape trace through a model.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m0" data-lesson="m0-05" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="index.html" aria-current="page">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 0 · Foundations</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M0 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m0-05">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M0 Foundations</a> / <span>PyTorch workflow</span>
+    </nav>
+
+    <h1>The PyTorch workflow, end to end</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 5 of 5 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      <code>fit()</code> is a convenience, not magic. Own the loop once and every later debugging
+      problem becomes a matter of inspecting one line at a time.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Write a complete training loop with a <code>Dataset</code> and <code>DataLoader</code>.</li>
+        <li>Trace tensor shapes and count parameters through linear and convolutional stacks.</li>
+        <li>Evaluate with <code>model.eval()</code> and <code>torch.no_grad()</code>.</li>
+        <li>Save and restore a checkpoint containing model and optimizer state.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        <code>clf.fit(X, y)</code> bundles batching, shuffling, optimization and evaluation into one
+        call. Here you write those five stages yourself. The payoff is that a shape mismatch, a
+        device mismatch or a stale optimizer state has exactly one place to look.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: the seven lines that matter</h2>
+
+    <p>
+      Every framework loop contains the same ingredients: build tensors, wrap them in a dataset,
+      shuffle batches, move them to the device, compute a loss, differentiate, update. Evaluation
+      repeats the forward pass with gradients disabled and the model in eval mode. A checkpoint
+      stores enough state to resume later: parameters, optimizer buffers, epoch and metrics.
+    </p>
+
+    <p>
+      Most runtime errors are shape errors in disguise. A linear layer expects its last dimension
+      to equal its fan-in; a conv expects NCHW; cross-entropy expects logits of shape
+      \((N,K)\) and labels of shape \((N)\). Trace these on paper before adding complexity.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Write the loop once, print one batch of shapes, and keep a checkpoint with both model and
+        optimizer state. Everything later — CNNs, RNNs, GANs — uses the same skeleton.
+      </p>
+    </div>
+
+    <h2 id="math">The math: a worked shape trace</h2>
+
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols and conventions</p>
+      <p>
+        \(N\) batch size; \(C\) channels; \(H,W\) spatial size; \(D\) feature width;
+        \(K\) kernel size; \(S\) stride; \(P\) zero padding; \(d\) dilation;
+        \(\mathbf{X}\) a batch of inputs; \(\mathbf{W}\) a weight matrix; \(\mathbf{b}\) a bias;
+        \(\hat y\) prediction; \(y\) label; \(\mathcal{L}\) loss; \(\theta\) all parameters.
+        Images are always written in <strong>NCHW</strong> order.
+      </p>
+    </aside>
+
+    <h3 id="dense-trace">1 · Dense network (N = 64, 784 → 128 → 10)</h3>
+
+    \[ \mathbf{Z}_1 = X\mathbf{W}_1+\mathbf{b}_1,\quad
+       \mathbf{A}_1=\mathrm{ReLU}(\mathbf{Z}_1),\quad
+       \hat y=\mathrm{softmax}(A_1\mathbf{W}_2+\mathbf{b}_2) \]
+
+    <p>
+      Shapes: \(X\in\mathbb{R}^{64\times784}\), \(\mathbf{W}_1\in\mathbb{R}^{784\times128}\),
+      \(\mathbf{b}_1\in\mathbb{R}^{128}\), so \(\mathbf{Z}_1\) and \(\mathbf{A}_1\) are
+      \((64,128)\). \(\mathbf{W}_2\in\mathbb{R}^{128\times10}\),
+      \(\mathbf{b}_2\in\mathbb{R}^{10}\), so the logits are \((64,10)\), the softmax is
+      \((64,10)\), and cross-entropy with labels \(y\in\{0,\dots,9\}^{64}\) returns one scalar.
+    </p>
+
+    <p>
+      Parameters: layer 1 has \(784\cdot128+128=100{,}352+128=100{,}480\); layer 2 has
+      \(128\cdot10+10=1{,}290\). Total \(\theta\): \(100{,}480+1{,}290=101{,}770\).
+    </p>
+
+    <h3 id="conv-trace">2 · Convolutional stack and the one output-size formula</h3>
+
+    \[ H' = \left\lfloor \frac{H + 2P - d(K-1) - 1}{S} \right\rfloor + 1 \]
+
+    <p>
+      Start with \(\mathsf{X}\in\mathbb{R}^{2\times3\times32\times32}\) (N=2, C=3, H=W=32).
+      A conv with \(C_{out}=16\), \(K=3\), \(P=1\), \(S=1\), \(d=1\) gives
+      \(H'=\lfloor(32+2\cdot1-1(3-1)-1)/1\rfloor+1=\lfloor31\rfloor+1=32\),
+      so the output is \((2,16,32,32)\). Its parameters are
+      \(K^2 C C_{out}+C_{out}=9\cdot3\cdot16+16=432+16=448\).
+    </p>
+
+    <p>
+      A max-pool with \(K=2,S=2,P=0\) gives
+      \(H'=\lfloor(32+0-1(2-1)-1)/2\rfloor+1=\lfloor30/2\rfloor+1=16\), output
+      \((2,16,16,16)\). Flattening produces \(16\cdot16\cdot16=4096\) features per sample,
+      shape \((2,4096)\). A final linear layer \(4096\to10\) has
+      \(4096\cdot10+10=40{,}970\) parameters. Total \(448+40{,}970=41{,}418\).
+    </p>
+
+    <h2 id="lab">Lab: trace shapes through your own stack</h2>
+
+    <p>
+      Add layers, change the input shape, and watch every output shape and parameter count update.
+      The convolution and pooling rows show the substituted arithmetic for the output-size formula;
+      a linear layer applied to a feature map deliberately reports a shape error until you insert
+      <strong>Flatten</strong>.
+    </p>
+
+    <section class="lab" data-widget="m0-05-shape-tracer" data-badge="exact"
+             data-title="Forward shape and parameter tracer"
+             data-note="Exact: spatial sizes come from DL.tensor.outSize and parameter counts from DL.nn.convParams / DL.nn.fcParams.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      Two complete training loops on the same synthetic binary task. The PyTorch version uses
+      <code>TensorDataset</code>, <code>DataLoader</code> and a checkpoint; the Keras version uses a
+      <code>tf.data</code> pipeline and a manual <code>GradientTape</code> loop rather than
+      <code>fit()</code>. Keras image layers default to NHWC internally; these examples use dense
+      inputs, so no image-layout conversion is needed here.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+
+torch.manual_seed(0)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Synthetic classification data: (512, 4) features, 2 classes.
+X = torch.randn(512, 4)
+y = (X[:, 0] + X[:, 1] &gt; 0).long()
+loader = DataLoader(TensorDataset(X, y), batch_size=32, shuffle=True)
+
+model = nn.Sequential(nn.Linear(4, 16), nn.ReLU(), nn.Linear(16, 2)).to(device)
+opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+loss_fn = nn.CrossEntropyLoss()                    # logits (N, 2), labels (N,)
+
+for epoch in range(1, 11):
+    model.train()
+    total = 0.0
+    for xb, yb in loader:                          # shapes (32, 4) and (32,)
+        xb, yb = xb.to(device), yb.to(device)      # device must match the model
+        opt.zero_grad()
+        logits = model(xb)
+        loss = loss_fn(logits, yb)
+        loss.backward()
+        opt.step()
+        total += loss.item() * len(yb)
+    model.eval()
+    with torch.no_grad():                          # no graph, no parameter updates
+        pred = model(X.to(device)).argmax(dim=1)   # dim=1 selects the class axis
+        acc = (pred == y.to(device)).float().mean().item()
+    print(f"epoch {epoch:2d}  train loss {total/len(X):.4f}  acc {acc:.3f}")
+
+torch.save({
+    "model": model.state_dict(),
+    "optimizer": opt.state_dict(),
+    "epoch": 10,
+}, "checkpoint.pt")
+
+# Restore into a fresh model / optimizer before resuming training.
+model2 = nn.Sequential(nn.Linear(4, 16), nn.ReLU(), nn.Linear(16, 2)).to(device)
+opt2 = torch.optim.Adam(model2.parameters(), lr=1e-2)
+ckpt = torch.load("checkpoint.pt", map_location=device, weights_only=False)
+model2.load_state_dict(ckpt["model"])
+opt2.load_state_dict(ckpt["optimizer"])
+print("restored epoch", ckpt["epoch"])</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+
+tf.random.set_seed(0)
+X = tf.random.normal([512, 4])
+y = tf.cast(X[:, 0] + X[:, 1] &gt; 0, tf.int32)
+ds = tf.data.Dataset.from_tensor_slices((X, y)).shuffle(512).batch(32)
+
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(16, activation="relu", input_shape=(4,)),
+    tf.keras.layers.Dense(2),                      # logits, shape (N, 2)
+])
+opt = tf.keras.optimizers.Adam(1e-2)
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+@tf.function
+def train_step(xb, yb):
+    with tf.GradientTape() as tape:                # records operations for backprop
+        logits = model(xb, training=True)
+        loss = loss_fn(yb, logits)
+    grads = tape.gradient(loss, model.trainable_variables)
+    opt.apply_gradients(zip(grads, model.trainable_variables))
+    return loss
+
+for epoch in range(1, 11):
+    total, count = 0.0, 0
+    for xb, yb in ds:
+        loss = train_step(xb, yb)
+        total += float(loss) * len(yb); count += len(yb)
+    logits = model(X, training=False)              # eval mode: no dropout / BN updates
+    acc = tf.reduce_mean(tf.cast(tf.argmax(logits, axis=1) == y, tf.float32))
+    print(f"epoch {epoch:2d}  train loss {total/count:.4f}  acc {float(acc):.3f}")
+
+model.save_weights("checkpoint.weights.h5")
+model2 = tf.keras.Sequential([
+    tf.keras.layers.Dense(16, activation="relu", input_shape=(4,)),
+    tf.keras.layers.Dense(2),
+])
+model2.build([None, 4])
+model2.load_weights("checkpoint.weights.h5")       # restore parameters
+print("restored", len(model2.trainable_variables), "variable tensors")</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      Both loops print values computed at runtime — no two runs with different seeds match digit for
+      digit. The API surface differs, but the seven stages (data, batch, device, forward, loss,
+      backward, step) are identical.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting <code>no_grad()</code></p>
+        <p>
+          Evaluation still builds a graph and stores activations. It gives correct numbers but
+          wastes memory; wrap the eval forward pass in <code>torch.no_grad()</code>.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title"><code>.item()</code> vs tensor</p>
+        <p>
+          <code>.item()</code> extracts a Python number and detaches it from the graph. Useful for
+          logging, wrong if you intend to differentiate through the value. Accumulate losses with
+          <code>loss.item() * batch_size</code> to avoid keeping the graph alive.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Wrong <code>argmax</code> axis</p>
+        <p>
+          Logits have shape \((N,K)\), so classes live on axis 1. Using <code>dim=0</code> compares
+          different samples and yields meaningless predictions.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Device and dtype mismatch</p>
+        <p>
+          A CPU tensor added to a CUDA parameter raises an error. Move inputs, labels and any
+          manually created buffers to the same device as the model; keep floating data in float32
+          (or float16 with mixed precision).
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader adds a convolution before their classifier and gets a
+      <code>mat1 and mat2 shapes cannot be multiplied</code> error mentioning
+      <code>32×8192</code> and <code>1024×10</code>. The model definition is otherwise unchanged.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The feature map was never flattened. After the conv and pool blocks the tensor has shape
+        \((N,C,H,W)\); <code>nn.Linear</code> wants a matrix whose last axis matches its fan-in.
+        Insert <code>nn.Flatten()</code> before the first linear layer, or call
+        <code>x = x.reshape(x.size(0), -1)</code> in <code>forward()</code>.
+      </p>
+      <p class="small muted">
+        To find the expected fan-in, print one batch: <code>print(x.shape)</code> just before the
+        failing layer. Here \(C\cdot H\cdot W = 8192\), not 1024 — the linear layer was built for an
+        older, smaller input.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m0-05">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — the PyTorch workflow",
+        "questions": [
+          {
+            "q": "A 784→128→10 MLP with biases has how many learnable parameters?",
+            "options": ["100,480", "101,770", "101,640", "102,000"],
+            "correct": 1,
+            "why": [
+              "That counts only the first layer.",
+              "Correct: (784·128+128) + (128·10+10) = 100,480 + 1,290 = 101,770.",
+              "That forgets the second layer's bias.",
+              "That is a rough guess, not the formula's result."
+            ]
+          },
+          {
+            "q": "A 3×3 convolution with padding 1 and stride 1 on a 32×32 image outputs…",
+            "options": ["30×30", "31×31", "32×32", "34×34"],
+            "correct": 2,
+            "why": [
+              "That is the result without padding.",
+              "That would require asymmetric padding.",
+              "Correct: floor((32 + 2 − 2 − 1)/1) + 1 = 32.",
+              "Padding does not grow the output by two here."
+            ]
+          },
+          {
+            "q": "Why use torch.no_grad() during evaluation?",
+            "options": [
+              "To enable dropout",
+              "To avoid building a graph and storing activations",
+              "To change the learning rate",
+              "To convert labels to one-hot vectors"
+            ],
+            "correct": 1,
+            "why": [
+              "Dropout is controlled by model.eval(), not by no_grad.",
+              "Correct: no autograd graph means less memory and slightly faster inference.",
+              "The optimizer is not involved in evaluation.",
+              "Labels are not modified by the context manager."
+            ]
+          },
+          {
+            "q": "For logits of shape (64, 10), which axis gives the predicted class?",
+            "options": ["axis 0", "axis 1", "Both", "Neither — use argmin"],
+            "correct": 1,
+            "why": [
+              "Axis 0 indexes samples in the batch.",
+              "Correct: axis 1 holds the 10 class scores, so argmax(dim=1) returns 64 predictions.",
+              "Only one axis contains class scores.",
+              "Higher logit means higher predicted probability."
+            ]
+          },
+          {
+            "q": "What should a resumable checkpoint contain at minimum?",
+            "options": [
+              "Only the model weights",
+              "Model state, optimizer state and the epoch/step counter",
+              "Only the loss value",
+              "The entire source tree"
+            ],
+            "correct": 1,
+            "why": [
+              "Model-only checkpoints lose momentum and Adam moments, changing the resumed trajectory.",
+              "Correct: optimizer buffers and the step counter are needed to continue faithfully.",
+              "A loss value alone cannot reconstruct any state.",
+              "Source code belongs in version control, not in a training checkpoint."
+            ]
+          },
+          {
+            "q": "DataLoader with shuffle=True primarily…",
+            "options": [
+              "Makes batches independent of the original row order",
+              "Increases the batch size",
+              "Normalizes the inputs",
+              "Disables gradient computation"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: shuffling avoids systematic ordering bias and gives SGD varied gradients.",
+              "Batch size is a separate argument.",
+              "Normalization must be applied explicitly.",
+              "DataLoader does not touch autograd settings."
+            ]
+          },
+          {
+            "q": "The error 'mat1 and mat2 shapes cannot be multiplied' right after a conv block usually means…",
+            "options": [
+              "The learning rate is too high",
+              "A Flatten layer is missing before the linear layer",
+              "The labels are one-hot encoded",
+              "The GPU is out of memory"
+            ],
+            "correct": 1,
+            "why": [
+              "Optimizer settings cannot cause a shape mismatch.",
+              "Correct: a (N,C,H,W) tensor must be flattened to (N,C·H·W) first.",
+              "One-hot labels affect the loss, not matrix multiplication shapes.",
+              "OOM reports a memory error, not a shape error."
+            ]
+          },
+          {
+            "q": "A conv layer with C_in=3, C_out=16 and K=3 (bias=True) has how many parameters?",
+            "options": ["144", "432", "448", "768"],
+            "correct": 2,
+            "why": [
+              "That omits the channel and output factors.",
+              "That counts only the 9·3·16 = 432 weights and forgets the 16 biases.",
+              "Correct: K²·C_in·C_out + C_out = 9·3·16 + 16 = 448.",
+              "That uses the weight count twice."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · The training loop is data → batch/device → forward → loss → backward → step, with eval in <code>no_grad()</code> mode.<br>
+        2 · Trace shapes before running: dense layers need (N,D), convs need NCHW, and a 4096-feature flatten feeds a 40,970-parameter linear layer.<br>
+        3 · Save model state, optimizer state and the step counter together so a run can be resumed exactly.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m0-05">
+      <h2>Cheat sheet — M0·05</h2>
+      <ul>
+        <li>Linear params: \(D_{in}D_{out}+D_{out}\); conv params: \(K^2 C_{in}C_{out}+C_{out}\).</li>
+        <li>Output size: \(H'=\lfloor(H+2P-d(K-1)-1)/S\rfloor+1\).</li>
+        <li>784→128→10: 101,770 parameters. 3→16 conv k3 on 32×32: 448 parameters.</li>
+        <li>Logits shape \((N,K)\), labels \((N)\), class axis 1.</li>
+        <li>Loop: <code>zero_grad → forward → loss → backward → step</code>.</li>
+        <li>Eval: <code>model.eval()</code> + <code>torch.no_grad()</code>; train again with <code>model.train()</code>.</li>
+        <li>Checkpoint: model state + optimizer state + epoch + metrics.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Paszke, A. — <em>PyTorch: An Imperative Style, High-Performance Deep Learning Library</em> (2019).</li>
+      <li>Abadi, M. — <em>TensorFlow: A System for Large-Scale Machine Learning</em> (2016).</li>
+      <li>LeCun, Y. — <em>Gradient-Based Learning Applied to Document Recognition</em> (1998).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m0-04-initialization-and-debugging.html">← Init &amp; debugging</a>
+      <a href="index.html">Module overview →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M0 Foundations</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m0-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

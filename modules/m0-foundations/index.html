@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M0 · Foundations — DeepLearn Lab</title>
+<meta name="description" content="Five interactive lessons from the perceptron to a complete PyTorch training loop: losses, backprop, optimizers, initialization and debugging.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-root="../../" data-module="m0">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="index.html" aria-current="page">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" style="padding-top:var(--s8)">
+    <div>
+      <p class="hero__eyebrow">Module 0 · Foundations · 5 lessons</p>
+      <h1>From one neuron to a training loop.</h1>
+      <p class="hero__lede">
+        This bridge module sets the notation used in every later chapter. You will derive a backward
+        pass by hand, race five optimizers, train a live MLP in the browser, and finish owning every
+        line of a PyTorch loop.
+      </p>
+      <div class="hstack">
+        <a class="btn btn--accent" href="m0-01-perceptron-to-mlp.html" style="padding:9px 14px;font-size:var(--fs-3)">Start lesson 1 →</a>
+        <a class="btn" href="#exam" style="padding:9px 14px;font-size:var(--fs-3)">Take the module exam</a>
+      </div>
+      <div class="hero__stats" style="margin-top:var(--s6)">
+        <div class="hero__stat"><b>5</b><span>lessons</span></div>
+        <div class="hero__stat"><b>7</b><span>exact labs</span></div>
+        <div class="hero__stat"><b>10</b><span>exam questions</span></div>
+        <div class="hero__stat"><b>0</b><span>external assets</span></div>
+      </div>
+    </div>
+    <div aria-hidden="true">
+      <svg viewBox="0 0 420 320" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
+        <defs>
+          <linearGradient id="m0edge" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".15"/>
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity=".75"/>
+          </linearGradient>
+        </defs>
+        <g stroke="url(#m0edge)" stroke-width="1.5">
+          <path d="M60 80 L170 45"/><path d="M60 80 L170 110"/><path d="M60 160 L170 45"/>
+          <path d="M60 160 L170 110"/><path d="M60 160 L170 175"/>
+          <path d="M60 240 L170 110"/><path d="M60 240 L170 175"/>
+          <path d="M170 45 L285 110"/><path d="M170 110 L285 110"/><path d="M170 175 L285 170"/>
+          <path d="M285 110 L380 160"/><path d="M285 170 L380 160"/>
+        </g>
+        <g fill="var(--surface)" stroke="var(--accent)" stroke-width="2">
+          <circle cx="60" cy="80" r="13"/><circle cx="60" cy="160" r="13"/><circle cx="60" cy="240" r="13"/>
+          <circle cx="170" cy="45" r="13"/><circle cx="170" cy="110" r="13"/><circle cx="170" cy="175" r="13"/>
+          <circle cx="285" cy="110" r="13"/><circle cx="285" cy="170" r="13"/>
+          <circle cx="380" cy="160" r="15" fill="var(--accent)" stroke="none"/>
+        </g>
+        <g font-family="ui-monospace, monospace" font-size="10" fill="var(--ink-3)">
+          <text x="34" y="300">x</text><text x="145" y="300">hidden</text>
+          <text x="260" y="300">hidden</text><text x="362" y="300">ŷ</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="section-head">
+      <h2>How to use this module</h2>
+      <p>offline · exact labs · read in order</p>
+    </div>
+    <div class="grid3">
+      <div class="callout callout--tip" style="margin:0">
+        <p class="callout__title">Double-click a lesson</p>
+        <p>Everything runs from <code>file://</code>. No server, no account, no CDN. KaTeX is vendored
+           locally and every visual is drawn from numbers computed in your browser.</p>
+      </div>
+      <div class="callout callout--bridge" style="margin:0">
+        <p class="callout__title">Read the badge first</p>
+        <p><span class="badge badge--exact">Exact math</span> means the numbers are computed live.
+           <span class="badge badge--illustrative">Illustrative</span> means schematic — and says so.
+           All seven M0 labs are exact.</p>
+      </div>
+      <div class="callout callout--math" style="margin:0">
+        <p class="callout__title">Notation is fixed</p>
+        <p>\(\eta\) is the learning rate, \(\lambda\) the decay strength, images are NCHW, and
+           logits are pre-softmax outputs. M1–M6 use exactly the same symbols.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap" id="lessons">
+    <div class="section-head">
+      <h2>The five lessons</h2>
+      <p>M0 · foundations bridge</p>
+    </div>
+
+    <div class="module-grid">
+      <a class="module-card" href="m0-01-perceptron-to-mlp.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M0 · 01</span>
+          <span class="tag">MLP</span>
+        </div>
+        <h3>From perceptron to multilayer networks</h3>
+        <p>Why a straight line cannot solve XOR, how two ReLUs carve out a band, and what universal approximation really promises.</p>
+        <div class="module-card__meta">
+          <span>Lesson 1 of 5 · 16 min read</span>
+          <span>2 exact labs</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m0-02-losses-and-backprop.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M0 · 02</span>
+          <span class="tag">Backprop</span>
+        </div>
+        <h3>Losses, graphs and backpropagation</h3>
+        <p>One 2→3→1 network differentiated by hand, MSE/BCE/CE gradients, and a live finite-difference check.</p>
+        <div class="module-card__meta">
+          <span>Lesson 2 of 5 · 18 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m0-03-gradient-descent-and-optimizers.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M0 · 03</span>
+          <span class="tag">Optimizers</span>
+        </div>
+        <h3>Gradient descent and optimizers</h3>
+        <p>Momentum, RMSProp, Adam and AdamW derived on a scalar, then raced from one start on a bowl, a ravine and a saddle.</p>
+        <div class="module-card__meta">
+          <span>Lesson 3 of 5 · 17 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m0-04-initialization-and-debugging.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M0 · 04</span>
+          <span class="tag">Debugging</span>
+        </div>
+        <h3>Initialization and debugging training</h3>
+        <p>Variance propagation, Xavier and He scales at depth 10, live toy-data training and the overfit-one-batch test.</p>
+        <div class="module-card__meta">
+          <span>Lesson 4 of 5 · 20 min read</span>
+          <span>2 exact labs</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m0-05-pytorch-workflow.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M0 · 05</span>
+          <span class="tag">PyTorch</span>
+        </div>
+        <h3>The PyTorch workflow, end to end</h3>
+        <p>Datasets, DataLoader, device, eval mode and checkpoints — with a worked shape trace and a Keras mirror of the loop.</p>
+        <div class="module-card__meta">
+          <span>Lesson 5 of 5 · 16 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <section class="roadmap" id="exam-section" style="padding-top:0">
+    <div class="section-head">
+      <h2 id="exam">Module exam</h2>
+      <p>10 questions · feedback after submit</p>
+    </div>
+    <p class="small muted">
+      Covers all five M0 lessons. Answers are stored locally, so you can leave and come back.
+    </p>
+
+    <section class="quiz" data-quiz="m0-exam" data-exam="1">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "M0 module exam — foundations",
+        "questions": [
+          {
+            "q": "Why can one neuron not compute XOR?",
+            "options": [
+              "Sigmoid saturates on 0 and 1",
+              "Its boundary is one straight line and XOR is not linearly separable",
+              "It has no bias term",
+              "Its output is not a probability"
+            ],
+            "correct": 1,
+            "why": [
+              "Saturation is a numerical issue, not the structural limitation.",
+              "Correct: w·x+b=0 is a single hyperplane; XOR's positive corners are diagonal.",
+              "A bias only shifts the line; it cannot bend it.",
+              "A sigmoid output is a probability; thresholding is trivial."
+            ]
+          },
+          {
+            "q": "A 2→4→1 MLP with a ReLU hidden layer and linear output has how many parameters?",
+            "options": ["12", "17", "21", "9"],
+            "correct": 1,
+            "why": [
+              "That counts only the first layer's weights and biases.",
+              "Correct: (2·4+4)+(4·1+1)=12+5=17.",
+              "That adds four extra biases that do not exist.",
+              "That is the 2→2→1 hand-built XOR network."
+            ]
+          },
+          {
+            "q": "For h=ReLU(z), which derivative vector multiplies the incoming gradient when z=(0.8,0.1,−0.15)?",
+            "options": ["(1,1,1)", "(1,1,0)", "(0.8,0.1,0)", "(0,0,1)"],
+            "correct": 1,
+            "why": [
+              "That is the identity derivative, not ReLU's.",
+              "Correct: ReLU′=1 for positive pre-activations and 0 for negative ones.",
+              "Those are activations, not derivatives.",
+              "That selects the inactive unit instead of the active ones."
+            ]
+          },
+          {
+            "q": "Cross-entropy with logits z=(2,1,0.1) and target class 1 has gradient ∂L/∂z equal to…",
+            "options": [
+              "softmax(z)",
+              "softmax(z) − e₁",
+              "one-hot e₁",
+              "−softmax(z)"
+            ],
+            "correct": 1,
+            "why": [
+              "That is the probability vector before subtracting the target.",
+              "Correct: the fused CE gradient is p − y, i.e. (0.659, −0.758, 0.099).",
+              "That would ignore the predicted distribution entirely.",
+              "That is the wrong sign and misses the target term."
+            ]
+          },
+          {
+            "q": "With β=0.9, η=0.1 and a constant gradient of 2, what is the momentum velocity after two steps?",
+            "options": ["2.0", "3.8", "5.42", "1.8"],
+            "correct": 1,
+            "why": [
+              "That is the velocity after the first step.",
+              "Correct: v₁=2, v₂=0.9·2+2=3.8.",
+              "That is the velocity after three steps.",
+              "That drops the newly added gradient."
+            ]
+          },
+          {
+            "q": "How does AdamW differ from Adam with L2 regularization?",
+            "options": [
+              "It uses a different activation",
+              "It decays parameters directly, outside the adaptive denominator",
+              "It never uses a learning rate",
+              "It replaces gradients with signs"
+            ],
+            "correct": 1,
+            "why": [
+              "Optimizers are independent of the activation choice.",
+              "Correct: decoupled weight decay avoids distortion by √ŝ.",
+              "A learning rate is still needed.",
+              "That describes signSGD, not AdamW."
+            ]
+          },
+          {
+            "q": "Xavier normal initialization for a 784→256 layer has standard deviation…",
+            "options": ["0.025", "0.0439", "0.0505", "0.0759"],
+            "correct": 1,
+            "why": [
+              "That uses the wrong fan-in/out combination.",
+              "Correct: √(2/(784+256)) = √(2/1040) ≈ 0.0439.",
+              "That is He for fan-in 784.",
+              "That is Xavier's uniform bound, not the normal std."
+            ]
+          },
+          {
+            "q": "A ReLU layer whose pre-activations are N(−3,1) has roughly what fraction of alive units?",
+            "options": ["50%", "16%", "0.14%", "100%"],
+            "correct": 2,
+            "why": [
+              "That requires a zero mean.",
+              "That corresponds to a mean near −1.",
+              "Correct: P(z>0)=1−Φ(3)≈0.00135.",
+              "A negative mean kills most units."
+            ]
+          },
+          {
+            "q": "What does a successful overfit-one-batch test establish?",
+            "options": [
+              "The model generalizes well",
+              "The model, loss and data pipeline can fit a tiny dataset at all",
+              "The validation split is unnecessary",
+              "Weight decay is tuned correctly"
+            ],
+            "correct": 1,
+            "why": [
+              "A single batch says nothing about generalization.",
+              "Correct: failure here points to a model or pipeline bug, not to insufficient data.",
+              "You still need a held-out set to measure generalization.",
+              "Regularization tuning comes later."
+            ]
+          },
+          {
+            "q": "A 3×3 conv (C_in=3, C_out=16, bias) on a 32×32 image with padding 1, stride 1 outputs…",
+            "options": [
+              "30×30 with 416 parameters",
+              "31×31 with 432 parameters",
+              "32×32 with 448 parameters",
+              "32×32 with 432 parameters"
+            ],
+            "correct": 2,
+            "why": [
+              "That is the no-padding size and the weight count without biases.",
+              "That would need asymmetric padding; 432 is weights only.",
+              "Correct: H′=32 and 9·3·16+16=448 parameters.",
+              "The spatial size is right but the 16 biases were omitted."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+  </section>
+
+  <footer class="sitefoot">
+    <div>DeepLearn Lab · M0 Foundations · static notes, built to be read offline</div>
+    <div class="hstack" style="gap:var(--s4)">
+      <a href="../../index.html">All modules</a>
+      <a href="#" data-action="search">Search</a>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </div>
+  </footer>
+</main>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m0-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

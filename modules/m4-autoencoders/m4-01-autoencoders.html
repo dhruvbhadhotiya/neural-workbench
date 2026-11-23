@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autoencoders: bottlenecks, denoising, sparse · DeepLearn Lab</title>
+<meta name="description" content="Train a nonlinear 2-D autoencoder live, derive reconstruction loss, the bottleneck rank argument, sparse and contractive penalties, and the linear-AE equals PCA result.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m4" data-lesson="m4-01" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="index.html" aria-current="page">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 4 · Autoencoders</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M4 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m4-01">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M4 Autoencoders</a> / <span>Autoencoders</span>
+    </nav>
+
+    <h1>Autoencoders: learn the bottleneck</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 1 of 5 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      An autoencoder is a compressor you train instead of derive. Shrink the middle, and the network
+      must discover which features of the data are worth keeping — we will watch that happen live.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Train a 2→<em>k</em>→2 autoencoder on a curved 2-D cloud and read its reconstruction error.</li>
+        <li>Explain the bottleneck with a rank argument, and show why a linear autoencoder is just PCA.</li>
+        <li>Compute sparse, contractive and denoising objectives with concrete numbers.</li>
+        <li>Choose when an autoencoder helps and when its reconstruction loss is misleading.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        PCA compresses by computing one eigenvector problem on your data matrix. An autoencoder
+        compresses by <em>learning</em> an encoder \(\mathbf h = f(\mathbf x)\) and a decoder
+        \(\hat{\mathbf x} = g(\mathbf h)\) with gradient descent. With linear \(f,g\) and squared
+        error, the two give the same subspace. With a nonlinearity, the autoencoder can bend that
+        subspace into a curve — which is the whole reason to learn it.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a narrow middle forces discovery</h2>
+
+    <p>
+      Let \(\mathbf x \in \mathbb{R}^{D}\) be one input, \(\mathbf h \in \mathbb{R}^{k}\) its
+      <strong>latent code</strong>, and \(\hat{\mathbf x}\) the reconstruction. The encoder uses
+      parameters \(\theta_e\), the decoder \(\theta_d\); together \(\theta = \{\theta_e,\theta_d\}\).
+      If \(k &lt; D\), the code is a bottleneck: a \(k\)-dimensional vector cannot carry all \(D\)
+      coordinates, so the network must keep structure and discard noise. If \(k \ge D\), an identity
+      map fits perfectly and teaches you nothing.
+    </p>
+
+    <p>
+      The interesting case is data that only <em>looks</em> \(D\)-dimensional. A curved line in the
+      plane needs two coordinates to write down, but only one number to locate a point along it.
+      An autoencoder with \(k=1\) can unroll that curve; PCA can only draw its best straight line
+      through it. That difference — curve versus line — is what the first lab makes visible.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        A bottleneck is a compression budget. Too small and the reconstruction blurs; too large and
+        the network memorises the identity. The useful middle is where reconstruction stays good
+        <em>and</em> the code is smaller than the input.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="recon">1 · Reconstruction loss</h3>
+
+    <p>
+      With \(N\) samples and squared error summed over the \(D\) coordinates, the mean squared
+      error (MSE) is
+    </p>
+
+    \[ \mathcal{L}_{\text{rec}}(\theta) = \frac{1}{N}\sum_{n=1}^{N}\lVert \hat{\mathbf x}_n - \mathbf x_n\rVert_2^2, \qquad \hat{\mathbf x}_n = g_\theta(f_\theta(\mathbf x_n)) \]
+
+    <p>
+      <strong>Worked example.</strong> One 2-D point \(\mathbf x = (2,-1)\) is reconstructed as
+      \(\hat{\mathbf x} = (1.6,-0.8)\). The errors are \(2-1.6 = 0.4\) and \(-1+0.8 = -0.2\);
+      squared, \(0.16 + 0.04 = 0.20\). With \(D=2\), the per-coordinate MSE is \(0.20/2 = 0.10\).
+      All losses below use this <em>mean over samples and coordinates</em> reduction unless stated.
+    </p>
+
+    <h3 id="bottleneck">2 · The bottleneck rank argument</h3>
+
+    <p>
+      If both encoder and decoder are linear maps \(\mathbf h = W_e\mathbf x\),
+      \(\hat{\mathbf x}=W_d\mathbf h\), then \(\hat{\mathbf x} = (W_dW_e)\mathbf x\). The product of a
+      \(D\times k\) and a \(k\times D\) matrix has rank at most \(k\). So the reconstruction lives in
+      at most a \(k\)-dimensional subspace of \(\mathbb{R}^D\), even if the data does not.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With \(D=3, k=1\), take the \(1\times 3\) encoder
+      \(W_e=(1,1,0)\) and the \(3\times 1\) decoder \(W_d=(1,1,0)^\top\). For
+      \(\mathbf x=(2,3,4)\), the code is \(h=2+3+0=5\), and
+      \(\hat{\mathbf x}=W_dh=(5,5,0)\): only one direction survives, so the third coordinate
+      is lost completely. A nonlinear encoder escapes this rank bound because \(h\) can be any
+      scalar function of \(\mathbf x\).
+    </p>
+
+    <h3 id="pca">3 · Linear autoencoder = PCA</h3>
+
+    <p>
+      Let the centred data covariance be
+      \(C = \frac{1}{N}\sum_n(\mathbf x_n-\boldsymbol\mu)(\mathbf x_n-\boldsymbol\mu)^\top\), with
+      eigenvectors \(\mathbf v_1,\ldots,\mathbf v_D\) ordered by eigenvalue
+      \(\lambda_1\ge\lambda_2\ge\cdots\). The optimal rank-\(k\) linear encoder projects onto the
+      top \(k\) eigenvectors: \(h_i = (\mathbf x-\boldsymbol\mu)^\top\mathbf v_i\), and the decoder
+      reverses it, \(\hat{\mathbf x}=\boldsymbol\mu+\sum_{i=1}^{k}h_i\mathbf v_i\). The minimal MSE is
+      \(\frac{1}{D}\sum_{i=k+1}^{D}\lambda_i\) — the variance you threw away.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Take four centred points
+      \((1,2),(2,1),(-1,-2),(-2,-1)\). Their covariance is
+      \(C=\begin{bmatrix}2.5&amp;2\\2&amp;2.5\end{bmatrix}\), with
+      \(\mathbf v_1=(1,1)/\sqrt 2\), \(\lambda_1=4.5\) and
+      \(\mathbf v_2=(1,-1)/\sqrt 2\), \(\lambda_2=0.5\). For \(k=1\) and \(\mathbf x=(2,1)\):
+      \(h_1=(2+1)/\sqrt 2 = 2.1213\), so \(\hat{\mathbf x}=2.1213(1,1)/\sqrt 2=(1.5,1.5)\).
+      Squared error \(= (0.5)^2+(-0.5)^2 = 0.5\), matching \(\lambda_2=0.5\); reduced over
+      \(D=2\) coordinates, the MSE is \(0.5/2=0.25\). The retained variance fraction is
+      \(4.5/(4.5+0.5)=0.90\).
+    </p>
+
+    <h3 id="sparse">4 · Sparse penalty</h3>
+
+    <p>
+      To force a <em>sparse</em> code, add an \(\ell_1\) penalty on the hidden activation:
+      \(\mathcal{L} = \mathcal{L}_{\text{rec}} + \lambda\lVert \mathbf h\rVert_1
+      = \mathcal{L}_{\text{rec}} + \lambda\sum_{j=1}^{k}|h_j|\), where \(\lambda &gt; 0\) is the
+      penalty strength. Unlike \(\ell_2\), \(\ell_1\) pushes small activations exactly to zero.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> For \(\mathbf h=(0.5,-0.2,0)\) and \(\lambda=0.1\):
+      \(\lVert\mathbf h\rVert_1 = 0.5+0.2+0 = 0.7\), penalty \(=0.1\times 0.7 = 0.07\).
+      If the reconstruction term was \(0.10\), the total objective is \(0.17\).
+    </p>
+
+    <h3 id="contractive">5 · Contractive penalty</h3>
+
+    <p>
+      A contractive autoencoder discourages sensitivity of the code to small input changes. With
+      the Jacobian \(J = \partial\mathbf h/\partial\mathbf x \in \mathbb{R}^{k\times D}\), the penalty is
+      \(\lambda\lVert J\rVert_F^2 = \lambda\sum_{i,j}J_{ij}^2\), where \(\lVert\cdot\rVert_F\) is the
+      Frobenius norm (square root of the sum of squared entries).
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Suppose \(k=D=2\) and
+      \(J=\begin{bmatrix}1&amp;0\\0.5&amp;0\end{bmatrix}\). Then
+      \(\lVert J\rVert_F^2 = 1^2+0^2+0.5^2+0^2 = 1.25\). With \(\lambda=0.01\) the penalty is
+      \(0.0125\); added to the \(0.10\) reconstruction MSE from above, the objective is \(0.1125\).
+    </p>
+
+    <h3 id="denoise">6 · Denoising autoencoder</h3>
+
+    <p>
+      Corrupt the input to \(\tilde{\mathbf x} = \mathbf x + \boldsymbol\varepsilon\), with
+      \(\varepsilon_j\sim\mathcal N(0,\sigma^2)\), and train the network to reconstruct the
+      <em>clean</em> \(\mathbf x\): \(g(f(\tilde{\mathbf x}))\approx\mathbf x\). For a linear rank-1
+      autoencoder with top eigenvalue \(\lambda_1\) and discarded eigenvalue \(\lambda_2\), the exact
+      expected MSE is \(\lambda_2+\sigma^2\). With optimal shrinkage of the noisy code by
+      \(\lambda_1/(\lambda_1+\sigma^2)\), it is \(\lambda_2+\lambda_1\sigma^2/(\lambda_1+\sigma^2)\).
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Let \(\lambda_1=2.5,\lambda_2=0.5,\sigma=1\). Plain
+      projection gives \(0.5+1^2 = 1.5\). Shrinkage gives
+      \(0.5 + 2.5\cdot 1/(2.5+1) = 0.5+0.7143 = 1.2143\). The second lab computes both curves
+      from a real covariance matrix, not from a hand-drawn sketch.
+    </p>
+
+    <h2 id="lab">Labs</h2>
+
+    <h3 id="lab-ae">Lab 1 · A nonlinear bottleneck you can watch train</h3>
+    <p>
+      The points lie on a smooth curve in the plane. Press <em>Run</em>, then move the \(k\) slider
+      from 1 to 4: with \(k=1\) the reconstructions collapse toward a line, with \(k=4\) they can
+      nearly copy the input. Colour encodes squared reconstruction error; the lower panel shows the
+      latent code. The network is rebuilt from the same seed at each \(k\), so the comparison is fair.
+    </p>
+
+    <section class="lab" data-widget="m4-01-autoencoder-2d" data-badge="exact"
+             data-title="2-D nonlinear autoencoder"
+             data-note="Exact: a 2→k→2 DL.nn.MLP is trained live with DL.trainer; MSE and error colours are computed from the displayed points.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="lab-denoise">Lab 2 · Noise versus reconstruction error</h3>
+    <p>
+      The linear autoencoder here is solved in closed form: its encoder is the top eigenvector of
+      the sample covariance, so it is exactly PCA truncated to one component. The two MSE curves
+      come from the analytic formulas above; the readout also evaluates 1,200 seeded noisy samples
+      as a numerical check. Toggle shrinkage to see the Wiener-style factor help at high noise.
+    </p>
+
+    <section class="lab" data-widget="m4-01-denoising-slider" data-badge="exact"
+             data-title="Denoising error versus σ"
+             data-note="Exact: closed-form PCA basis from the sample covariance; MSE curves λ₂+σ² and λ₂+λ₁σ²/(λ₁+σ²), cross-checked on 1,200 seeded samples.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      A synthetic curved point cloud, a 2→<em>k</em>→2 autoencoder, and a latent plot. The only
+      training trick worth noting is that the <em>target equals the input</em>: this is
+      self-supervised, no labels are needed. Shapes are written in NCHW-free 2-D form here because
+      the data is a point cloud, not an image batch.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">PCA check</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+torch.manual_seed(0)
+
+# Synthetic curved 2-D manifold: shape (512, 2)
+t = torch.empty(512).uniform_(-1.25, 1.25)
+x = torch.stack([t + 0.04 * torch.randn(512),
+                 0.55 * t**3 - 0.35 * t + 0.05 * torch.randn(512)], dim=1)
+k = 1
+
+class Autoencoder(nn.Module):
+    def __init__(self, k):
+        super().__init__()
+        self.enc = nn.Sequential(nn.Linear(2, k), nn.Tanh())   # (N, 2) -> (N, k)
+        self.dec = nn.Sequential(nn.Linear(k, 8), nn.Tanh(),
+                                 nn.Linear(8, 2))              # (N, k) -> (N, 2)
+
+    def forward(self, x):
+        h = self.enc(x)          # latent code, shape (N, k)
+        return self.dec(h), h
+
+model = Autoencoder(k)
+opt = torch.optim.Adam(model.parameters(), lr=0.01)   # lr = η
+
+for step in range(2000):
+    xhat, h = model(x)                         # self-supervised target is x itself
+    loss = ((xhat - x) ** 2).mean()            # MSE, mean over N and D
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+
+with torch.no_grad():
+    xhat, h = model(x)
+    mse = ((xhat - x) ** 2).mean().item()
+    print("MSE", round(mse, 4), "latent", tuple(h.shape))  # (512, 1)</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import numpy as np
+
+# The linear special case: top-k eigenvectors of the centred covariance.
+Xc = x.detach().numpy() - x.detach().numpy().mean(axis=0)   # (512, 2), centred
+C = Xc.T @ Xc / len(Xc)                                     # (2, 2) covariance
+w, V = np.linalg.eigh(C)                                    # ascending eigenvalues
+v1 = V[:, -1]                                               # top eigenvector, shape (2,)
+
+h = Xc @ v1                       # encode: (512, 2) @ (2,) -> (512, 1)
+Xhat = np.outer(h, v1) + x.detach().numpy().mean(axis=0)
+print("top eigenvalue", round(w[-1], 3),
+      "MSE", round(np.mean((Xhat - x.detach().numpy()) ** 2), 3))</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      The PCA check is not a different model — it is the closed-form solution a <em>linear</em>
+      autoencoder converges to. The PyTorch version with <code>nn.Tanh()</code> can do better
+      because it is not restricted to a straight subspace.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Bottleneck too small</p>
+        <p>
+          With \(k=1\) on intrinsically 2-D data, MSE rises sharply and reconstructions blur into a
+          line. That is not a training bug — it is the compression budget. Compare against a
+          non-degenerate baseline before increasing \(k\).
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Bottleneck too large</p>
+        <p>
+          With \(k \ge D\), the identity map reaches zero loss while learning nothing about
+          structure. A beautiful reconstruction at \(k=D\) is not evidence of useful features.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">No normalisation</p>
+        <p>
+          MSE is in squared input units, so a feature measured in thousands dominates a feature in
+          units. Standardise features first; otherwise the autoencoder spends its capacity on the
+          largest scale rather than the most informative direction.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Judging by loss alone</p>
+        <p>
+          A low reconstruction loss does not imply good downstream features, and an autoencoder is
+          not a generator — sampling random \(\mathbf h\) from nowhere usually gives nonsense. Use
+          a downstream task for features and a VAE or GAN for generation.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “my latent size is 1, yet reconstruction is pixel-perfect from the first
+      step.” The training loop is fine. The model definition is not:
+    </p>
+
+<pre class="code" data-lang="python"><code>class BrokenAE(nn.Module):
+    def forward(self, x):
+        h = self.enc(x)                 # shape (N, 1)
+        return x + self.dec(h), h       # BUG: input is added to the output</code></pre>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The <code>+ x</code> is a skip connection. The decoder only has to learn zero, and the
+        reconstruction is the input regardless of the bottleneck. Remove it:
+        <code>return self.dec(h), h</code>. A more subtle version of the same bug stores the
+        uncorrupted input in a global and returns it during denoising training.
+      </p>
+      <p class="small muted">
+        Quick detector: set the latent to a constant vector by hand. If the output still equals the
+        input, information is bypassing the bottleneck.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m4-01">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — autoencoders",
+        "questions": [
+          {
+            "q": "A 10→2→10 linear autoencoder can reconstruct exactly which part of the input?",
+            "options": ["All 10 coordinates", "At most a 2-D subspace", "Only the first 2 coordinates", "Nothing without a nonlinearity"],
+            "correct": 1,
+            "why": [
+              "That would require rank 10; the product of the two maps has rank at most 2.",
+              "Correct: rank(W_dec W_enc) ≤ k = 2, so only a 2-D subspace survives.",
+              "It can be any 2-D subspace, not necessarily the first two coordinates.",
+              "Linear autoencoders work; they are simply equivalent to PCA."
+            ]
+          },
+          {
+            "q": "For x = (3, 4) reconstructed as x̂ = (2, 4), what is the per-coordinate MSE (D = 2)?",
+            "options": ["0.5", "1", "2", "0.25"],
+            "correct": 0,
+            "why": [
+              "Correct: ((3−2)² + (4−4)²)/2 = 1/2 = 0.5.",
+              "That is the squared error summed over coordinates, before dividing by D.",
+              "That is the Euclidean distance squared if both coordinates had erred by 1.",
+              "That would divide by D twice."
+            ]
+          },
+          {
+            "q": "A linear autoencoder trained with MSE on centred data converges to…",
+            "options": ["The first k input features", "The top k principal eigenvectors", "A random rotation", "The mean of the data"],
+            "correct": 1,
+            "why": [
+              "It learns a rotation, not a coordinate subset.",
+              "Correct: PCA is the optimal rank-k approximation under squared error.",
+              "The subspace is determined by the covariance, not by chance.",
+              "The mean is only the centre we subtract first."
+            ]
+          },
+          {
+            "q": "With covariance eigenvalues λ₁ = 4.5, λ₂ = 0.5, what is the MSE of a rank-1 linear autoencoder reduced over D = 2?",
+            "options": ["4.5", "0.5", "0.25", "2.5"],
+            "correct": 2,
+            "why": [
+              "That is the retained variance, not the discarded variance.",
+              "That is the discarded variance summed over coordinates, before dividing by D.",
+              "Correct: the lost eigenvalue is 0.5 and the per-coordinate MSE is 0.5/2 = 0.25.",
+              "That is the average of the two eigenvalues."
+            ]
+          },
+          {
+            "q": "For h = (0.3, −0.4, 0.1) and λ = 0.2, the sparse penalty λ‖h‖₁ is…",
+            "options": ["0.16", "0.08", "0.04", "0.12"],
+            "correct": 0,
+            "why": [
+              "Correct: |0.3| + |−0.4| + |0.1| = 0.8, and 0.2 × 0.8 = 0.16.",
+              "That uses only the largest absolute coordinate.",
+              "That is the squared absolute value of one coordinate.",
+              "That drops the coordinate 0.1 from the ℓ₁ sum."
+            ]
+          },
+          {
+            "q": "A denoising autoencoder is trained to…",
+            "options": ["Reconstruct its corrupted input from a clean target", "Reconstruct the clean input from a corrupted one", "Predict the noise itself only", "Minimise cross-entropy on class labels"],
+            "correct": 1,
+            "why": [
+              "That reverses the roles: the input is corrupted and the target is clean.",
+              "Correct: x̃ = x + ε goes in and x is the target.",
+              "Estimating noise can be a parametrisation, but the stated objective is clean reconstruction.",
+              "There are no class labels in self-supervised reconstruction."
+            ]
+          },
+          {
+            "q": "For a linear rank-1 AE with λ₁ = 2.5, λ₂ = 0.5 and noise σ = 1, what is the exact expected plain-projection MSE?",
+            "options": ["0.5", "1.0", "1.5", "3.0"],
+            "correct": 2,
+            "why": [
+              "That ignores the noise contribution.",
+              "That counts only the noise added along the retained direction.",
+              "Correct: λ₂ + σ² = 0.5 + 1 = 1.5.",
+              "That adds λ₁ as well."
+            ]
+          },
+          {
+            "q": "Why is an autoencoder usually a poor generator?",
+            "options": ["Its latent space is always 1-D", "It has no decoder", "Nothing constrains arbitrary latent codes to be plausible", "MSE is not differentiable"],
+            "correct": 2,
+            "why": [
+              "The latent width is a design choice, not a fixed 1.",
+              "An autoencoder has both an encoder and a decoder.",
+              "Correct: training only covers codes produced by the encoder; the gaps between them are unconstrained.",
+              "MSE is differentiable everywhere."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · An autoencoder learns \(\mathbf h=f(\mathbf x)\) and \(\hat{\mathbf x}=g(\mathbf h)\) by minimising \(\frac{1}{ND}\sum\lVert\hat{\mathbf x}-\mathbf x\rVert^2\); the bottleneck limits the rank of a linear version to \(k\).<br>
+        2 · Linear + MSE is PCA: the optimal code is the projection on \(\mathbf v_1,\ldots,\mathbf v_k\), with error \(\frac{1}{D}\sum_{i&gt;k}\lambda_i\).<br>
+        3 · Sparse, contractive and denoising terms change what the code preserves; low reconstruction loss alone is not proof of useful features.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m4-01">
+      <h2>Cheat sheet — M4·01</h2>
+      <ul>
+        <li>\(\mathcal{L}_{\text{rec}} = \frac{1}{ND}\sum_{n,i}(\hat x_{n,i}-x_{n,i})^2\). Worked: (2,−1)→(1.6,−0.8) gives 0.10.</li>
+        <li>Rank bound: \(\mathrm{rank}(W_dW_e)\le k\). Linear AE = PCA; error \(=\frac{1}{D}\sum_{i&gt;k}\lambda_i\).</li>
+        <li>Sparse: \(\mathcal{L}+\lambda\lVert\mathbf h\rVert_1\). Worked: \(\mathbf h=(0.5,-0.2,0),\lambda=0.1\Rightarrow 0.07\).</li>
+        <li>Contractive: \(\lambda\lVert\partial\mathbf h/\partial\mathbf x\rVert_F^2\). Worked: \(J=[[1,0],[0.5,0]],\lambda=0.01\Rightarrow 0.0125\).</li>
+        <li>Denoising: train \(g(f(\mathbf x+\varepsilon))\approx\mathbf x\); for rank 1, MSE \(=\lambda_2+\sigma^2\).</li>
+        <li>Check a suspicious AE by replacing \(\mathbf h\) with a constant: the output must change.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Hinton, G. E. — <em>Reducing the Dimensionality of Data with Neural Networks</em> (2006).</li>
+      <li>Vincent, P. — <em>Extracting and Composing Robust Features with Denoising Autoencoders</em> (2008).</li>
+      <li>Rifai, S. — <em>Contractive Auto-Encoding Manifold Tangent Classifier</em> (2011).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="index.html">← Module overview</a>
+      <a href="m4-02-variational-autoencoders.html">Next: variational autoencoders →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M4 Autoencoders</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m4-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

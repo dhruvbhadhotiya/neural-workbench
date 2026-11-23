@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DCGAN and conditional GANs · DeepLearn Lab</title>
+<meta name="description" content="Compute transposed-conv shapes and real DCGAN parameter counts, then add class conditioning with a cGAN or projection discriminator.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m3" data-lesson="m3-03" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="index.html" aria-current="page">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 3 · Generative models</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M3 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m3-03">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M3 GANs</a> / <span>DCGAN &amp; cGAN</span>
+    </nav>
+
+    <h1>DCGAN and conditional GANs</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 3 of 4 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Replace flat vectors with convolutions, compute every shape and parameter count, then tell the
+      generator which class (or attribute) to draw.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Compute transposed-convolution output sizes and trace a 100-vector to a 3×64×64 image.</li>
+        <li>Count the parameters of the DCGAN generator and discriminator with shown arithmetic.</li>
+        <li>State the DCGAN design rules and explain what batch norm, LeakyReLU and spectral norm change.</li>
+        <li>Write the conditional GAN objective and describe how conditioning enters both networks.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        A CNN encoder turns an image into a small feature map. The DCGAN generator is the mirror:
+        it starts from a small feature map and uses <em>transposed convolutions</em> to grow it back
+        into an image. Conditioning then adds a label \(y\) to both sides of the game.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: growing an image from noise</h2>
+
+    <p>
+      A multilayer perceptron can output \(3\cdot64\cdot64=12{,}288\) numbers, but it ignores the
+      spatial structure of an image. DCGAN uses strided convolutions in the discriminator and
+      transposed convolutions in the generator, so each layer has a local receptive field and the
+      number of channels changes in a regular pattern. The generator ends in \(\tanh\), matching
+      images scaled to \([-1,1]\); there is no final BatchNorm on the output layer.
+    </p>
+
+    <section class="lab" data-widget="m3-03-gan-architecture" data-badge="exact"
+             data-title="DCGAN shape and parameter tracer"
+             data-note="Exact: transposed-conv and conv output sizes come from the one output-size formula; every parameter count is computed from K²·C_in·C_out + C_out or 2·C for batch norm. The all-on setting reproduces tools/params.py.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Toggle network and layers in the tracer. With all options on, the totals reproduce
+      <code>python tools/params.py dcgan_g dcgan_d</code>: 3,577,667 generator parameters and
+      2,765,633 discriminator parameters. Turning batch norm off removes exactly \(2C\) parameters
+      per normalised layer; LeakyReLU and spectral norm add none.
+    </p>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="tconv">1 · Transposed-convolution output size</h3>
+
+    \[
+      H'=(H-1)S-2P+D(K-1)+\text{output\_padding}+1
+    \]
+
+    <p>
+      \(H\) is the input height (width \(W\) is identical for square inputs), \(K\) the kernel size,
+      \(S\) the stride, \(P\) the zero-padding passed to <code>ConvTranspose2d</code>, \(D\) the
+      dilation, and <code>output_padding</code> an extra additive term used to resolve stride
+      ambiguities. The standard DCGAN generator uses \(D=1\) and <code>output_padding=0</code>.
+    </p>
+
+    <p><strong>Worked examples.</strong></p>
+
+    \[
+      H=1,K=4,S=1,P=0:\quad (1-1)\cdot1-0+1\cdot(4-1)+0+1=0+3+1=4
+    \]
+    \[
+      H=4,K=4,S=2,P=1:\quad (4-1)\cdot2-2+1\cdot(4-1)+0+1=6-2+3+1=8
+    \]
+
+    <h3 id="trace">2 · The shape trace</h3>
+
+    \[
+      \mathbf{z}\in\mathbb{R}^{100}
+      \;\longrightarrow\ (512,4,4)\ \longrightarrow\ (256,8,8)\ \longrightarrow\ (128,16,16)
+      \ \longrightarrow\ (64,32,32)\ \longrightarrow\ (3,64,64)
+    \]
+
+    <p>
+      These are single-sample shapes \((C,H,W)\); a minibatch of \(N\) images is \((N,C,H,W)\) in
+      NCHW order. The first transposed convolution has
+      \(K^2 C_{\text{in}}C_{\text{out}}+C_{\text{out}}=4^2\cdot100\cdot512+512=819{,}712\)
+      parameters. The next has \(4^2\cdot512\cdot256+256=2{,}097{,}408\).
+    </p>
+
+    <table class="shape-table">
+      <caption>DCGAN generator — output from tools/params.py (batch N = 1)</caption>
+      <thead><tr><th>layer</th><th>output (N,C,H,W)</th><th>params</th></tr></thead>
+      <tbody>
+        <tr><td>Input z (100)</td><td>(1, 100, 1, 1)</td><td>0</td></tr>
+        <tr><td>ConvT2d(100→512, 4×4, s=1, p=0)</td><td>(1, 512, 4, 4)</td><td>819,712</td></tr>
+        <tr><td>BatchNorm2d(512)</td><td>(1, 512, 1, 1)</td><td>1,024</td></tr>
+        <tr><td>ConvT2d(512→256, 4×4, s=2, p=1)</td><td>(1, 256, 8, 8)</td><td>2,097,408</td></tr>
+        <tr><td>BatchNorm2d(256)</td><td>(1, 256, 1, 1)</td><td>512</td></tr>
+        <tr><td>ConvT2d(256→128, 4×4, s=2, p=1)</td><td>(1, 128, 16, 16)</td><td>524,416</td></tr>
+        <tr><td>BatchNorm2d(128)</td><td>(1, 128, 1, 1)</td><td>256</td></tr>
+        <tr><td>ConvT2d(128→64, 4×4, s=2, p=1)</td><td>(1, 64, 32, 32)</td><td>131,136</td></tr>
+        <tr><td>BatchNorm2d(64)</td><td>(1, 64, 1, 1)</td><td>128</td></tr>
+        <tr><td>ConvT2d(64→3, 4×4, s=2, p=1)</td><td>(1, 3, 64, 64)</td><td>3,075</td></tr>
+        <tr><td>Tanh</td><td>(1, 3, 64, 64)</td><td>0</td></tr>
+        <tr><td><strong>total</strong></td><td></td><td><strong>3,577,667 (3.58M)</strong></td></tr>
+      </tbody>
+    </table>
+
+    <table class="shape-table">
+      <caption>DCGAN discriminator — output from tools/params.py (batch N = 1)</caption>
+      <thead><tr><th>layer</th><th>output (N,C,H,W)</th><th>params</th></tr></thead>
+      <tbody>
+        <tr><td>Conv2d(3→64, 4×4, s=2, p=1, leaky)</td><td>(1, 64, 32, 32)</td><td>3,136</td></tr>
+        <tr><td>BatchNorm2d(64)</td><td>(1, 64, 32, 32)</td><td>128</td></tr>
+        <tr><td>Conv2d(64→128, 4×4, s=2, p=1, leaky)</td><td>(1, 128, 16, 16)</td><td>131,200</td></tr>
+        <tr><td>BatchNorm2d(128)</td><td>(1, 128, 16, 16)</td><td>256</td></tr>
+        <tr><td>Conv2d(128→256, 4×4, s=2, p=1, leaky)</td><td>(1, 256, 8, 8)</td><td>524,544</td></tr>
+        <tr><td>BatchNorm2d(256)</td><td>(1, 256, 8, 8)</td><td>512</td></tr>
+        <tr><td>Conv2d(256→512, 4×4, s=2, p=1, leaky)</td><td>(1, 512, 4, 4)</td><td>2,097,664</td></tr>
+        <tr><td>Conv2d(512→1, 4×4, s=1, p=0)</td><td>(1, 1, 1, 1)</td><td>8,193</td></tr>
+        <tr><td>Sigmoid</td><td>(1, 1, 1, 1)</td><td>0</td></tr>
+        <tr><td><strong>total</strong></td><td></td><td><strong>2,765,633 (2.77M)</strong></td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="rules">3 · The DCGAN rules</h3>
+
+    <ul>
+      <li>Use strided convolutions in \(D\), transposed convolutions in \(G\).</li>
+      <li>BatchNorm in both networks, except the output layer of \(G\) and the input layer of \(D\).</li>
+      <li>ReLU in \(G\) (all layers but the output); LeakyReLU in \(D\).</li>
+      <li>\(\tanh\) on \(G\)'s output and images scaled to \([-1,1]\).</li>
+    </ul>
+
+    <p>
+      Spectral normalisation is a later refinement: replace \(\mathbf{W}\) by
+      \(\mathbf{W}_{\mathrm{SN}}=\mathbf{W}/\sigma(\mathbf{W})\), where \(\sigma\) is the largest
+      singular value. <strong>Worked example.</strong> If \(\sigma(\mathbf{W})=4\), every entry is
+      divided by 4; a weight 0.8 becomes 0.2 and the layer's Lipschitz constant is bounded by 1.
+      It adds no parameters.
+    </p>
+
+    <h3 id="cgan">4 · Conditioning on a label</h3>
+
+    \[
+      \min_G\max_D V(D,G\mid y)=
+      \mathbb{E}_{\mathbf{x}\sim p_{\text{data}}}\log D(\mathbf{x}\mid y)
+      +\mathbb{E}_{\mathbf{z}}\log\bigl(1-D(G(\mathbf{z}\mid y)\mid y)\bigr)
+    \]
+
+    <p>
+      Here \(y\) is a class index or attribute vector. It is given to <em>both</em> networks: \(G\)
+      sees \([\mathbf{z};y]\) (or an embedding of \(y\)) and \(D\) sees the image together with \(y\).
+      This turns an unconditional sampler into \(N_{\text{classes}}\) controlled samplers.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With a correct label, suppose \(D(\mathbf{x}\mid y)=0.900\)
+      for a real image; BCE contributes \(-\log 0.900=0.10536\). With a wrong label the discriminator
+      outputs \(D(\mathbf{x}\mid y')=0.198\), giving \(-\log 0.198=1.61659\). The mean over these two samples is
+      \((0.10536+1.61659)/2=0.86098\): the discriminator is rewarded for detecting the mismatch.
+    </p>
+
+    <p>
+      A <strong>projection discriminator</strong> uses \(f(\mathbf{x},y)=a(y)+\mathbf{v}(\mathbf{x})^\top\mathbf{w}(y)\)
+      instead of concatenating \(y\). <strong>Worked example.</strong> With \(a(y)=0.5\),
+      \(\mathbf{v}=(1,-1)\) and \(\mathbf{w}=(1.2,0.2)\), the logit is
+      \(0.5+1\cdot1.2+(-1)\cdot0.2=1.5\), so \(D=\sigma(1.5)=0.81757\).
+    </p>
+
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <p>
+        \(N\) batch size · \(C,H,W\) channels, height, width · \(K\) kernel size · \(S\) stride ·
+        \(P\) padding · \(D\) dilation (here 1) · \(\mathbf{z}\in\mathbb{R}^{100}\) latent vector ·
+        \(G,D\) generator and discriminator · \(y\) class label · \(\sigma\) singular value (in the
+        spectral-norm paragraph) or sigmoid (where stated) · \(\mathbf{v},\mathbf{w}\) projection
+        feature and class embedding · \(a(y)\) class bias.
+      </p>
+    </div>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      The PyTorch listing is fully self-contained: procedural blob images are generated with tensor
+      arithmetic, then a DCGAN is trained for a few hundred steps. The commented lines show the
+      standard MNIST/CIFAR swap for a real experiment. The Keras tab builds the same architecture
+      (Keras uses NHWC internally; comments state the equivalent NCHW shapes used in prose).
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+torch.manual_seed(0)
+device = "cpu"
+
+# ---- procedural "blob" images, shape (N, 3, 64, 64) in [-1, 1] ----
+yy, xx = torch.meshgrid(torch.linspace(-1, 1, 64), torch.linspace(-1, 1, 64), indexing="ij")
+grid = torch.stack([xx, yy]).unsqueeze(0)          # (1, 2, 64, 64)
+
+def make_blobs(n):
+    cx, cy = torch.rand(n, 1, 1) * 1.2 - 0.6, torch.rand(n, 1, 1) * 1.2 - 0.6
+    r = torch.rand(n, 1, 1) * 0.35 + 0.18
+    d2 = (grid[0, 0] - cx) ** 2 + (grid[0, 1] - cy) ** 2
+    disk = (d2 &lt; r ** 2).float() * 2 - 1          # (n, 64, 64)
+    return disk.unsqueeze(1).repeat(1, 3, 1, 1)     # (N, C, H, W) = (n, 3, 64, 64)
+
+real_data = make_blobs(256).to(device)
+
+class Generator(nn.Module):
+    def __init__(self, z=100):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.ConvTranspose2d(z, 512, 4, 1, 0, bias=False),   # 1x1 -> 4x4
+            nn.BatchNorm2d(512), nn.ReLU(True),
+            nn.ConvTranspose2d(512, 256, 4, 2, 1, bias=False), # 4 -> 8
+            nn.BatchNorm2d(256), nn.ReLU(True),
+            nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False), # 8 -> 16
+            nn.BatchNorm2d(128), nn.ReLU(True),
+            nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False),  # 16 -> 32
+            nn.BatchNorm2d(64), nn.ReLU(True),
+            nn.ConvTranspose2d(64, 3, 4, 2, 1, bias=False),    # 32 -> 64
+            nn.Tanh(),
+        )
+    def forward(self, z):
+        return self.net(z.view(z.size(0), -1, 1, 1))  # (N,100) -> (N,3,64,64)
+
+class Discriminator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(3, 64, 4, 2, 1), nn.LeakyReLU(0.2, inplace=True),      # 64 -> 32
+            nn.Conv2d(64, 128, 4, 2, 1, bias=False), nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),                                  # 32 -> 16
+            nn.Conv2d(128, 256, 4, 2, 1, bias=False), nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2, inplace=True),                                  # 16 -> 8
+            nn.Conv2d(256, 512, 4, 2, 1, bias=False), nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2, inplace=True),                                  # 8 -> 4
+            nn.Conv2d(512, 1, 4, 1, 0), nn.Sigmoid(),                         # 4 -> 1
+        )
+    def forward(self, x):
+        return self.net(x).view(-1)                       # (N,1,1,1) -> (N,)
+
+G, D = Generator().to(device), Discriminator().to(device)
+print("G params", sum(p.numel() for p in G.parameters()))  # bias=False variant: 963 fewer than tools/params.py
+print("D params", sum(p.numel() for p in D.parameters()))  # see tools/params.py dcgan_d
+print("fake shape", tuple(G(torch.randn(2, 100)).shape))   # (2, 3, 64, 64)
+
+opt_g = torch.optim.Adam(G.parameters(), lr=2e-4, betas=(0.5, 0.999))
+opt_d = torch.optim.Adam(D.parameters(), lr=2e-4, betas=(0.5, 0.999))
+bce = nn.BCELoss()
+
+for step in range(300):
+    idx = torch.randint(0, len(real_data), (32,))
+    real = real_data[idx]
+    fake = G(torch.randn(32, 100, device=device))
+
+    opt_d.zero_grad()
+    loss_d = bce(D(real), torch.ones(32)) + bce(D(fake.detach()), torch.zeros(32))
+    loss_d.backward(); opt_d.step()
+
+    opt_g.zero_grad()
+    loss_g = bce(D(G(torch.randn(32, 100, device=device))), torch.ones(32))
+    loss_g.backward(); opt_g.step()
+    if step % 50 == 0:
+        print(step, round(loss_d.item(), 4), round(loss_g.item(), 4))
+
+# For a real dataset, swap the procedural tensors for e.g.
+# from torchvision import datasets, transforms
+# ds = datasets.MNIST(".", download=True, transform=transforms.Compose([
+#     transforms.Resize(64), transforms.ToTensor(),
+#     transforms.Normalize([0.5], [0.5])]))
+# (use 1 channel instead of 3, or repeat the grey channel to 3)
+</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+
+tf.random.set_seed(0)
+L = tf.keras.layers
+
+def generator(z_dim=100):
+    # Keras convolutions use NHWC internally; the prose traces NCHW shapes.
+    inp = L.Input(shape=(z_dim,))
+    x = L.Reshape((1, 1, z_dim))(inp)                   # NCHW equivalent: (N,100,1,1)
+    x = L.Conv2DTranspose(512, 4, strides=1, padding="valid", use_bias=False)(x)
+    x = L.BatchNormalization()(x); x = L.ReLU()(x)     # 4x4, 512 channels
+    x = L.Conv2DTranspose(256, 4, strides=2, padding="same", use_bias=False)(x)
+    x = L.BatchNormalization()(x); x = L.ReLU()(x)     # 8x8
+    x = L.Conv2DTranspose(128, 4, strides=2, padding="same", use_bias=False)(x)
+    x = L.BatchNormalization()(x); x = L.ReLU()(x)     # 16x16
+    x = L.Conv2DTranspose(64, 4, strides=2, padding="same", use_bias=False)(x)
+    x = L.BatchNormalization()(x); x = L.ReLU()(x)     # 32x32
+    out = L.Conv2DTranspose(3, 4, strides=2, padding="same", use_bias=False)(x)
+    out = L.Activation("tanh")(out)                    # 64x64x3, values in [-1, 1]
+    return tf.keras.Model(inp, out, name="generator")
+
+def discriminator():
+    inp = L.Input(shape=(64, 64, 3))
+    x = L.Conv2D(64, 4, strides=2, padding="same")(inp)  # 32x32
+    x = L.LeakyReLU(0.2)(x)
+    for c in (128, 256, 512):
+        x = L.Conv2D(c, 4, strides=2, padding="same", use_bias=False)(x)
+        x = L.BatchNormalization()(x)
+        x = L.LeakyReLU(0.2)(x)                          # 16, 8, 4
+    out = L.Conv2D(1, 4, strides=1, padding="valid")(x)  # 1x1x1 logit
+    return tf.keras.Model(inp, out, name="discriminator")
+
+G, D = generator(), discriminator()
+G.summary(); D.summary()
+print("G params", G.count_params(), "D params", D.count_params())
+
+# Conditional input: concatenate an embedded label with z before the Reshape.
+# z_in = L.Input(shape=(100,)); y_in = L.Input(shape=(10,))
+# zy = L.Concatenate()([z_in, L.Dense(50, activation="relu")(y_in)])
+</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      No images are downloaded in the PyTorch listing. The tables above come from
+      <code>python tools/params.py dcgan_g dcgan_d</code> (bias=True everywhere); the PyTorch
+      architecture above uses the standard bias=False before BatchNorm, which removes
+      \(512+256+128+64+3=963\) generator parameters. Keras totals also depend on bias conventions.
+      Training for 300 steps only demonstrates the loop, not sample quality.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">BatchNorm in D's input layer</p>
+        <p>
+          Normalising the raw image destroys the scale information \(D\) needs to spot fakes. Use
+          LeakyReLU on that first layer and start BatchNorm only at the second.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">No \(\tanh\) on G's output</p>
+        <p>
+          Real images are scaled to \([-1,1]\). A generator ending in ReLU or sigmoid produces
+          pixels in the wrong range, so \(D\) can win on brightness alone.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Wrong kernel/stride pair</p>
+        <p>
+          \(K=4,S=2,P=1\) exactly doubles the spatial size. With \(K=3,S=2,P=1\) you get an odd
+          off-by-one size; use the output-size formula before guessing.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Inconsistent conditioning</p>
+        <p>
+          Concatenating the label and adding a projection head are both valid, but \(G\) and \(D\)
+          must agree on the same representation. Mixing them silently trains different tasks.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “my DCGAN's discriminator reaches 100% accuracy immediately, and the
+      generated images look like flat grey tiles.” The procedural real data is in \([-1,1]\).
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The generator's output range does not match the data range. Most often the final
+        <code>nn.Tanh()</code> was replaced by <code>nn.Sigmoid()</code> (output in \([0,1]\)), or
+        the real images were left in \([0,255]\) or \([0,1]\) while \(G\) outputs \([-1,1]\). Make
+        both sides use the same range: scale real images with
+        <code>transforms.Normalize([0.5], [0.5])</code> for one channel (or three 0.5 values for
+        RGB) and keep <code>nn.Tanh()</code> at the end of \(G\).
+      </p>
+      <p class="small muted">
+        Second check: verify the fake shape with <code>G(torch.randn(2,100)).shape</code> — it must be
+        <code>(2, 3, 64, 64)</code> before it reaches \(D\).
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m3-03">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — DCGAN and conditional GANs",
+        "questions": [
+          {
+            "q": "A ConvTranspose2d with input H=4, K=4, S=2, P=1, D=1, output_padding=0 outputs…",
+            "options": ["4", "7", "8", "10"],
+            "correct": 2,
+            "why": [
+              "That would ignore the stride.",
+              "That is an off-by-one from the padding term.",
+              "Correct: (4−1)·2 − 2 + 3 + 0 + 1 = 8.",
+              "That double-counts the kernel term."
+            ]
+          },
+          {
+            "q": "Which shape trace matches the standard 64×64 DCGAN generator?",
+            "options": [
+              "100 → (512,4,4) → (256,8,8) → (128,16,16) → (64,32,32) → (3,64,64)",
+              "100 → (3,64,64) → (64,32,32) → (512,4,4)",
+              "100 → (512,8,8) → (3,64,64)",
+              "100 → (128,4,4) → (3,32,32)"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: channels halve as the spatial size doubles.",
+              "That is the discriminator's direction.",
+              "It skips the intermediate upsampling stages.",
+              "Those channels and sizes do not match tools/params.py."
+            ]
+          },
+          {
+            "q": "How many parameters does the first DCGAN generator layer ConvT(100→512, K=4) have?",
+            "options": ["51,200", "204,800", "819,712", "819,200"],
+            "correct": 2,
+            "why": [
+              "That is 100×512 without the kernel-area factor.",
+              "That is 4×100×512, missing one kernel dimension.",
+              "Correct: 4²·100·512 + 512 = 819,200 + 512 = 819,712.",
+              "That omits the 512 biases."
+            ]
+          },
+          {
+            "q": "Where should BatchNorm appear in a DCGAN?",
+            "options": [
+              "In every layer of both networks",
+              "In G except its output, and in D except its input",
+              "Only in D's input layer",
+              "Nowhere; it breaks convolutions"
+            ],
+            "correct": 1,
+            "why": [
+              "The two exceptions matter.",
+              "Correct: those are the DCGAN design rules.",
+              "BatchNorm on D's raw input is explicitly discouraged.",
+              "BatchNorm is standard in DCGAN."
+            ]
+          },
+          {
+            "q": "What does LeakyReLU in the discriminator help with?",
+            "options": [
+              "Avoiding dead units by keeping a small negative slope",
+              "Bounding the output to [-1,1]",
+              "Reducing the parameter count",
+              "Making convolution valid"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: the 0.2 slope keeps gradients alive for negative pre-activations.",
+              "That is tanh's job in the generator.",
+              "Activations have no parameters.",
+              "Convolutions do not depend on the activation."
+            ]
+          },
+          {
+            "q": "In a conditional GAN, where is the label y used?",
+            "options": [
+              "Only in the generator",
+              "Only in the discriminator",
+              "In both networks",
+              "It replaces the latent noise z"
+            ],
+            "correct": 2,
+            "why": [
+              "The discriminator must know the requested class too.",
+              "The generator must know what to draw.",
+              "Correct: D(x|y) and G(z|y) are both conditioned.",
+              "y supplements z; it does not replace the source of randomness."
+            ]
+          },
+          {
+            "q": "Spectral normalisation divides W by its largest singular value. If σ(W)=4, what happens to a weight of 0.8?",
+            "options": ["It becomes 0.2", "It becomes 3.2", "It stays 0.8", "It becomes 4"],
+            "correct": 0,
+            "why": [
+              "Correct: 0.8/4 = 0.2, bounding the layer's Lipschitz constant.",
+              "That multiplies instead of dividing.",
+              "Normalisation changes the weights.",
+              "That is the singular value itself."
+            ]
+          },
+          {
+            "q": "Why does G end in tanh when real images are scaled to [-1,1]?",
+            "options": [
+              "To make the image size 64×64",
+              "So generated pixels occupy the same range as real pixels",
+              "To reduce the number of channels",
+              "To increase the discriminator's accuracy"
+            ],
+            "correct": 1,
+            "why": [
+              "Spatial size is set by transposed convs, not the activation.",
+              "Correct: matching ranges stops D from winning on brightness alone.",
+              "The last conv sets the channel count.",
+              "Matching ranges makes D's job harder, not easier."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · A DCGAN generator grows 100 noise numbers into a (3,64,64) image with four transposed convolutions and halves the channels each time.<br>
+        2 · The exact parameter totals are 3,577,667 for G and 2,765,633 for D; batch norm contributes 2C per normalised layer.<br>
+        3 · A conditional GAN gives the label y to both networks; projection discriminators replace concatenation with a dot-product score.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m3-03">
+      <h2>Cheat sheet — M3·03</h2>
+      <ul>
+        <li>Transposed conv: \(H'=(H-1)S-2P+D(K-1)+\text{output\_padding}+1\).</li>
+        <li>Shape trace: 100 → (512,4,4) → (256,8,8) → (128,16,16) → (64,32,32) → (3,64,64).</li>
+        <li>Conv params \(K^2C_{\text{in}}C_{\text{out}}+C_{\text{out}}\); BN params \(2C\). DCGAN: G 3.58M, D 2.77M.</li>
+        <li>DCGAN rules: strided/transposed convs, BN except G output and D input, ReLU/LeakyReLU, tanh output.</li>
+        <li>cGAN objective: \(\mathbb{E}\log D(x\mid y)+\mathbb{E}\log(1-D(G(z\mid y)\mid y))\).</li>
+        <li>Spectral norm: \(W_{\mathrm{SN}}=W/\sigma(W)\); projection: \(a(y)+v(x)^\top w(y)\).</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Radford, A. — <em>Unsupervised Representation Learning with Deep Convolutional Generative Adversarial Networks</em> (2015).</li>
+      <li>Mirza, M. — <em>Conditional Generative Adversarial Networks</em> (2014).</li>
+      <li>Miyato, T. — <em>Spectral Normalization for Generative Adversarial Networks</em> (2018).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m3-02-training-and-evaluating-gans.html">← Training &amp; evaluating</a>
+      <a href="m3-04-gan-variants.html">Next: GAN variants →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M3 GANs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m3-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

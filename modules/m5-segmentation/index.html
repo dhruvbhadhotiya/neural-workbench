@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M5 · Segmentation &amp; Kaggle — DeepLearn Lab</title>
+<meta name="description" content="Four interactive lessons: FCN and dilation, U-Net and Dice/IoU, Mask R-CNN and RoIAlign, and an end-to-end Kaggle competition playbook.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-root="../../" data-module="m5">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="index.html" aria-current="page">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" style="padding-top:var(--s8)">
+    <div>
+      <p class="hero__eyebrow">Module 5 · Segmentation &amp; Kaggle · 4 lessons</p>
+      <h1>One label per pixel. Then one honest score.</h1>
+      <p class="hero__lede">
+        Paint masks and watch FCNs recover resolution; trace a U-Net block by block; drag a
+        fractional RoI through RoIAlign; then build a validation scheme you can trust in a
+        competition. Every exact lab computes the numbers you see.
+      </p>
+      <div class="hstack">
+        <a class="btn btn--accent" href="m5-01-segmentation-and-fcn.html" style="padding:9px 14px;font-size:var(--fs-3)">Start lesson 1 →</a>
+        <a class="btn" href="#exam" style="padding:9px 14px;font-size:var(--fs-3)">Take the module exam</a>
+      </div>
+      <div class="hero__stats" style="margin-top:var(--s6)">
+        <div class="hero__stat"><b>4</b><span>lessons</span></div>
+        <div class="hero__stat"><b>9</b><span>labs</span></div>
+        <div class="hero__stat"><b>10</b><span>exam questions</span></div>
+        <div class="hero__stat"><b>0</b><span>external assets</span></div>
+      </div>
+    </div>
+    <div aria-hidden="true">
+      <svg viewBox="0 0 420 320" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
+        <g stroke="var(--accent)" fill="none" stroke-width="1.4" opacity=".8">
+          <rect x="40" y="120" width="90" height="90" rx="6"/>
+          <rect x="56" y="136" width="58" height="58" rx="4"/>
+          <rect x="168" y="150" width="84" height="60" rx="6"/>
+          <rect x="300" y="110" width="96" height="96" rx="6"/>
+          <path d="M130 165 L168 180 M252 180 L300 158 M252 180 L300 186"/>
+        </g>
+        <g fill="var(--accent)" opacity=".75">
+          <rect x="66" y="146" width="20" height="20"/><rect x="90" y="146" width="20" height="20"/>
+          <rect x="66" y="170" width="20" height="20"/><rect x="90" y="170" width="20" height="20"/>
+        </g>
+        <g font-family="ui-monospace, monospace" font-size="10" fill="var(--ink-3)">
+          <text x="46" y="230">image + mask</text><text x="170" y="230">encoder / skips</text><text x="302" y="230">score</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="section-head">
+      <h2>How to use this module</h2>
+      <p>offline · seven exact labs · two schematic labs · one saved checklist</p>
+    </div>
+    <div class="grid3">
+      <div class="callout callout--tip" style="margin:0">
+        <p class="callout__title">Read the badge first</p>
+        <p><span class="badge badge--exact">Exact math</span> means the number is computed from the
+           pixels or grids on screen. <span class="badge badge--illustrative">Illustrative</span>
+           means the data is synthetic and the note says so.</p>
+      </div>
+      <div class="callout callout--bridge" style="margin:0">
+        <p class="callout__title">From M1 to M5</p>
+        <p>You already know convolutions and receptive fields. Here the output keeps \(H,W\), so
+           upsampling, skips and sub-pixel alignment become first-class design problems.</p>
+      </div>
+      <div class="callout callout--math" style="margin:0">
+        <p class="callout__title">Notation is fixed</p>
+        <p>Images are \((N,C,H,W)\). Dilation is \(D\), kernel \(K\), stride \(S\). IoU and Dice
+           have the same definitions here as in the metrics sections of earlier modules.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap" id="lessons">
+    <div class="section-head">
+      <h2>The four lessons</h2>
+      <p>M5 · segmentation and competition strategy</p>
+    </div>
+
+    <div class="module-grid">
+      <a class="module-card" href="m5-01-segmentation-and-fcn.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M5 · 01</span>
+          <span class="tag">FCN</span>
+        </div>
+        <h3>Segmentation and FCNs</h3>
+        <p>Semantic, instance and panoptic masks; transposed-conv sizes, checkerboard artefacts and dilated ASPP context.</p>
+        <div class="module-card__meta">
+          <span>Lesson 1 of 4 · 17 min read</span>
+          <span>3 exact labs</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m5-02-unet-and-dice.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M5 · 02</span>
+          <span class="tag">U-Net</span>
+        </div>
+        <h3>U-Net, Dice and IoU</h3>
+        <p>Block-by-block shape and parameter traces, real skip mismatches, and two draggable masks scored with overlap metrics.</p>
+        <div class="module-card__meta">
+          <span>Lesson 2 of 4 · 20 min read</span>
+          <span>2 exact labs</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m5-03-mask-rcnn.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M5 · 03</span>
+          <span class="tag">RoIAlign</span>
+        </div>
+        <h3>Mask R-CNN</h3>
+        <p>RPN anchor targets, three losses, and a fractional RoI dragged over a feature grid to compare RoIPool with RoIAlign.</p>
+        <div class="module-card__meta">
+          <span>Lesson 3 of 4 · 16 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m5-04-kaggle-playbook.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M5 · 04</span>
+          <span class="tag">Playbook</span>
+        </div>
+        <h3>Kaggle playbook</h3>
+        <p>Group and time folds, leakage detection, OOF stacking, ensembling and TTA, plus a saved submission checklist.</p>
+        <div class="module-card__meta">
+          <span>Lesson 4 of 4 · 18 min read</span>
+          <span>2 illustrative · 1 exact</span>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <section class="roadmap" id="exam-section" style="padding-top:0">
+    <div class="section-head">
+      <h2 id="exam">Module exam</h2>
+      <p>10 questions · feedback after submit</p>
+    </div>
+    <p class="small muted">
+      Covers all four M5 lessons. Everything asked here is answered in the lesson prose, labs or
+      code listings. Answers are stored locally.
+    </p>
+
+    <section class="quiz" data-quiz="m5-exam" data-exam="1">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "M5 module exam — segmentation and Kaggle",
+        "questions": [
+          {
+            "q": "Panoptic segmentation combines which two label rules?",
+            "options": [
+              "Bounding boxes and class probabilities",
+              "Class labels for stuff and per-instance labels for things",
+              "Grayscale depth and RGB colour",
+              "Logits and softmax probabilities"
+            ],
+            "correct": 1,
+            "why": [
+              "Boxes belong to detection; panoptic output is still a label map.",
+              "Correct: stuff gets one class colour, things get one colour per instance.",
+              "Depth is not part of the segmentation taxonomy.",
+              "Those are two representations of the same prediction, not two label rules."
+            ]
+          },
+          {
+            "q": "ConvTranspose2d with H=16, K=3, S=2, P=1, D=1 and output_padding=1 gives H′ = …",
+            "options": ["31", "32", "33", "34"],
+            "correct": 1,
+            "why": [
+              "That is what you get with output_padding=0.",
+              "Correct: (16−1)·2−2+2+1+1 = 32.",
+              "That would need output_padding=2.",
+              "That double-counts the kernel term."
+            ]
+          },
+          {
+            "q": "At dilation rate r=12 with K=3, the effective kernel size Keff is…",
+            "options": ["15", "24", "25", "37"],
+            "correct": 2,
+            "why": [
+              "That adds r and K instead of using the formula.",
+              "That is r·(K−1) without the +1.",
+              "Correct: 12·(3−1)+1 = 25.",
+              "That is the rate-18 branch of ASPP."
+            ]
+          },
+          {
+            "q": "In the 4-level U-Net with base 64, the first decoder convolution after upsampling from the bottleneck takes how many input channels?",
+            "options": ["512", "1024", "1536", "2048"],
+            "correct": 2,
+            "why": [
+              "That is the skip's channel count alone.",
+              "That is the bottleneck channel count before concatenation.",
+              "Correct: 1024 decoder channels + 512 skip channels = 1536.",
+              "That would require two skips."
+            ]
+          },
+          {
+            "q": "For the 6×6 toy masks with |A∩B|=6, |A|=|B|=9, IoU and Dice are…",
+            "options": ["0.5 and 0.667", "0.667 and 0.5", "6 and 9", "0.5 and 1.0"],
+            "correct": 0,
+            "why": [
+              "Correct: 6/12 = 0.5 and 12/18 ≈ 0.667.",
+              "The scores are reversed; Dice is the larger one.",
+              "Those are raw counts, not normalised scores.",
+              "Dice equals 1 only for identical masks."
+            ]
+          },
+          {
+            "q": "With ε=1 smoothing, Dice for two empty masks is…",
+            "options": ["undefined (NaN)", "0", "1", "0.5"],
+            "correct": 2,
+            "why": [
+              "Smoothing was introduced to avoid the 0/0.",
+              "That is the unsmoothed intuition, not the smoothed formula.",
+              "Correct: (2·0+1)/(0+0+1) = 1; document this convention.",
+              "Nothing in the formula yields one half."
+            ]
+          },
+          {
+            "q": "Why does RoIAlign use bilinear sampling instead of quantising the box?",
+            "options": [
+              "It is faster than max pooling",
+              "Fractional coordinates would otherwise be rounded, shifting the sampled features",
+              "It removes the need for a classification head",
+              "It replaces non-maximum suppression"
+            ],
+            "correct": 1,
+            "why": [
+              "Bilinear sampling is more expensive, not faster.",
+              "Correct: rounding the RoI changes which cells are read and misaligns the mask.",
+              "The heads are unchanged.",
+              "NMS is an inference-time selection step."
+            ]
+          },
+          {
+            "q": "How many anchors per location does an RPN with three scales and three aspect ratios use, and what IoU rule makes one positive if it is not the best match?",
+            "options": ["3 anchors; IoU > 0.3", "6 anchors; IoU > 0.5", "9 anchors; IoU > 0.7", "9 anchors; IoU > 0.3"],
+            "correct": 2,
+            "why": [
+              "That is only one scale's worth of anchors, and 0.3 is the negative cutoff.",
+              "That is two scales, and 0.5 is not the stated threshold.",
+              "Correct: 3·3 = 9 anchors; positive if IoU > 0.7 or best for a ground truth.",
+              "The anchor count is right but 0.3 marks negatives."
+            ]
+          },
+          {
+            "q": "CV 0.95 but leaderboard 0.70 on data with repeated patient ids. Which split should have been used?",
+            "options": ["Random KFold", "GroupKFold on patient id", "StratifiedKFold on the label", "No validation split"],
+            "correct": 1,
+            "why": [
+              "Random folds put near-duplicates on both sides and inflate CV.",
+              "Correct: holding out whole patients removes the duplicate path from train to validation.",
+              "Stratification protects class balance, not independence.",
+              "Skipping validation removes the very estimate you need."
+            ]
+          },
+          {
+            "q": "With independent per-model error variance σ²=0.04 and m=5 models, the variance of their averaged prediction is…",
+            "options": ["0.2", "0.04", "0.008", "0.024"],
+            "correct": 2,
+            "why": [
+              "That is one model's standard deviation.",
+              "That is one model's variance; averaging must reduce it.",
+              "Correct: σ²/m = 0.04/5 = 0.008.",
+              "That is the correlated case with ρ=0.5."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+  </section>
+
+  <footer class="sitefoot">
+    <div>DeepLearn Lab · M5 Segmentation &amp; Kaggle · static notes, built to be read offline</div>
+    <div class="hstack" style="gap:var(--s4)">
+      <a href="../../index.html">All modules</a>
+      <a href="#" data-action="search">Search</a>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </div>
+  </footer>
+</main>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m5-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

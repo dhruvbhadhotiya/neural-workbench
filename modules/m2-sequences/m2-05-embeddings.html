@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Word embeddings: lookup tables and meaning · DeepLearn Lab</title>
+<meta name="description" content="Read an embedding matrix as a lookup, derive skip-gram with negative sampling, compute cosine similarity exactly, and separate the illustrative analogy demo from exact window enumeration.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m2" data-lesson="m2-05" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="index.html" aria-current="page">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 2 · Sequences &amp; NLP</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M2 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m2-05">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M2 Sequences &amp; NLP</a> / <span>Embeddings</span>
+    </nav>
+
+    <h1>Embeddings: a lookup table that learns meaning</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 5 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      One-hot vectors are orthogonal: every word is equally far from every other. An embedding
+      replaces them with learned coordinates, so “king” and “queen” can end up near each other —
+      and the whole model becomes a table lookup plus a recurrence.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Read an embedding matrix as a lookup and count its parameters.</li>
+        <li>Contrast CBOW with skip-gram and write the negative-sampling objective.</li>
+        <li>Compute cosine similarity by hand and interpret an analogy result carefully.</li>
+        <li>Enumerate exact skip-gram (centre, context) pairs for a given window and stride.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        A one-hot feature column has no notion of similarity: the dot product of two different
+        one-hots is zero. An embedding is just a linear layer applied to that one-hot — but trained
+        so that words appearing in similar contexts get similar rows.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a trainable dictionary</h2>
+
+    <p>
+      The embedding matrix \(E\in\mathbb{R}^{V\times D}\) has one row per token and \(D\) numbers
+      per row. Looking up token \(w\) means selecting row \(w\). In a neural text model, this
+      replaces the one-hot input with a compact vector and is trained by backpropagation just like
+      any other weight.
+    </p>
+
+    <p>
+      Word2Vec trained such tables with two shallow objectives. <strong>CBOW</strong> predicts the
+      centre word from its surrounding words; <strong>skip-gram</strong> predicts each surrounding
+      word from the centre. Skip-gram gives more training examples for rare words, at higher cost.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Embeddings are a lookup table whose rows are learned. “Meaning” here means geometric
+        proximity produced by distributional training — not a definition.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="symbols">0 · Symbols</h3>
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <ul>
+        <li>\(V\): vocabulary size; \(D\): embedding width; \(E\in\mathbb{R}^{V\times D}\): embedding matrix.</li>
+        <li>\(\mathbf{u}_w\): vector for the centre word \(w\); \(\mathbf{v}_c\): vector for a context word \(c\); these are two rows of related tables.</li>
+        <li>\(K\): number of negative samples; \(p\): probability; \(\sigma\): logistic function; \(\cos\): cosine similarity.</li>
+      </ul>
+    </aside>
+
+    <h3 id="lookup">1 · Lookup is a matrix product</h3>
+
+    \[ \mathbf{v}_w = \mathrm{onehot}(w)\,E \]
+
+    <p>
+      Worked: \(V=3,D=2\) with
+      \(E=\begin{bmatrix}0.1&0.2\\1.0&-0.5\\0.3&0.7\end{bmatrix}\).
+      For token index 1, \(\mathrm{onehot}=(0,1,0)\) and \((0,1,0)E=(1.0,-0.5)\) — exactly row 1.
+      The table holds \(V D = 3\cdot2=6\) parameters; for \(V=30{,}000, D=512\) it holds
+      \(15{,}360{,}000\).
+    </p>
+
+    <h3 id="skipgram">2 · Skip-gram and negative sampling</h3>
+
+    \[ p(c\mid w) = \frac{\exp(\mathbf{v}_c\cdot\mathbf{u}_w)}
+                        {\sum_{c'=1}^{V}\exp(\mathbf{v}_{c'}\cdot\mathbf{u}_w)} \]
+
+    <p>
+      Worked with u = (1,0) and three candidate dot products 2, 1, −1:
+    </p>
+
+    \[ \frac{e^2}{e^2+e^1+e^{-1}}=\frac{7.3891}{10.4753}=0.7057,\quad
+       \frac{2.7183}{10.4753}=0.2595,\quad \frac{0.3679}{10.4753}=0.0351 \]
+
+    <p>
+      The full softmax touches all \(V\) words per example. Negative sampling replaces it with a
+      binary decision for the true context and \(K\) sampled non-contexts:
+    </p>
+
+    \[ \mathcal{L}_{sg} = -\log\sigma(\mathbf{v}_c\cdot\mathbf{u}_w)
+                         - \sum_{k=1}^{K}\log\sigma(-\mathbf{v}_{n_k}\cdot\mathbf{u}_w) \]
+
+    <p>
+      Worked with \(K=1\), \(\mathbf{u}_w=(1,0)\), true context \(\mathbf{v}_c=(2,1)\) and negative
+      \(\mathbf{v}_n=(-1,0)\): \(\mathbf{v}_c\cdot\mathbf{u}_w=2\),
+      \(\sigma(2)=0.8808\), \(-\log(0.8808)=0.127\);
+      \(-\mathbf{v}_n\cdot\mathbf{u}_w=1\), \(\sigma(1)=0.7311\),
+      \(-\log(0.7311)=0.313\). Total \(\mathcal{L}_{sg}=0.127+0.313=0.440\).
+    </p>
+
+    <p>
+      GloVe instead factorizes global co-occurrence counts, and FastText adds subword vectors so
+      rare or unseen words can be composed from pieces.
+    </p>
+
+    <section class="lab" data-widget="m2-05-skipgram-window" data-badge="exact"
+             data-title="Skip-gram window enumerator"
+             data-note="Exact: every (centre, context) pair and its count are enumerated from the displayed sentence, radius and stride.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="cosine">3 · Cosine similarity and analogies</h3>
+
+    \[ \mathrm{cos}(\mathbf{a},\mathbf{b}) = \frac{\mathbf{a}\cdot\mathbf{b}}{\lVert\mathbf{a}\rVert\lVert\mathbf{b}\rVert}
+       = \frac{\sum_i a_i b_i}{\sqrt{\sum_i a_i^2}\sqrt{\sum_i b_i^2}} \]
+
+    <p>
+      Worked with \(\mathbf{v}_{king}=(3,1)\) and \(\mathbf{v}_{queen}=(2.8,2.6)\):
+      dot \(=3\cdot2.8+1\cdot2.6=11\);
+      \(\lVert king\rVert=\sqrt{10}=3.1623\);
+      \(\lVert queen\rVert=\sqrt{7.84+6.76}=\sqrt{14.6}=3.8210\);
+      \(\cos=11/(3.1623\cdot3.8210)=11/12.083=0.9104\).
+    </p>
+
+    <p>
+      The famous analogy arithmetic is \(\mathbf{v}_{king}-\mathbf{v}_{man}+\mathbf{v}_{woman}
+      \approx \mathbf{v}_{queen}\). In 3-D, with \(\mathbf{v}_{king}=(3,1,0.5)\),
+      \(\mathbf{v}_{man}=(1,0,0.2)\), \(\mathbf{v}_{woman}=(0.8,1.6,0.4)\), the result is
+      \((3-1+0.8,\;1-0+1.6,\;0.5-0.2+0.4)=(2.8,2.6,0.7)\), chosen to equal the hand-built
+      \(\mathbf{v}_{queen}\) exactly. This is a <strong>demonstration on hand-built numbers</strong>,
+      not a learned model or a measured benchmark. Real analogies are approximate and depend on
+      the training corpus.
+    </p>
+
+    <section class="lab" data-widget="m2-05-embedding-explorer" data-badge="illustrative"
+             data-title="Embedding explorer (hand-built vectors)"
+             data-note="Illustrative: the 2-D word vectors are hand-built for teaching, not trained; nearest-neighbour search and cosine similarity are computed exactly from them.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      In PyTorch, <code>nn.Embedding</code> is the lookup table. The first listing proves it
+      equals a one-hot matrix multiply; the second trains a tiny skip-gram model on a toy corpus.
+      Row 0 is reserved for padding.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+torch.manual_seed(0)
+
+# 1) Embedding lookup == one-hot matmul.
+E = nn.Embedding(num_embeddings=5, embedding_dim=3, padding_idx=0)
+ids = torch.tensor([2, 4])
+print(E(ids).shape)                      # (2, 3)
+onehot = torch.nn.functional.one_hot(ids, num_classes=5).float()
+print(torch.allclose(E(ids), onehot @ E.weight))   # True
+print("parameters:", sum(p.numel() for p in E.parameters()))  # 15
+
+# 2) A tiny skip-gram loop on a built-in toy corpus (no downloads).
+corpus = "the quick brown fox jumps over the lazy dog".split()
+vocab = ["&lt;pad&gt;"] + sorted(set(corpus))
+stoi = {w: i for i, w in enumerate(vocab)}
+data = [stoi[w] for w in corpus]
+
+centre = nn.Embedding(len(vocab), 8, padding_idx=0)
+context = nn.Embedding(len(vocab), 8, padding_idx=0)
+opt = torch.optim.SGD(list(centre.parameters()) + list(context.parameters()), lr=0.1)
+
+pairs = []
+for i, c in enumerate(data):
+    for j in range(max(0, i - 2), min(len(data), i + 3)):
+        if j != i:
+            pairs.append((c, data[j]))   # 30 pairs for radius 2 on 9 tokens
+
+for step in range(200):
+    c, ctx = pairs[step % len(pairs)]
+    u, v = centre(torch.tensor([c])), context(torch.tensor([ctx]))
+    # Negative sampling: one random non-context word.
+    neg = torch.tensor([(c + 7 + step) % len(vocab)])
+    vn = context(neg)
+    pos = torch.nn.functional.logsigmoid((u * v).sum())       # log σ(v·u)
+    negl = torch.nn.functional.logsigmoid(-(u * vn).sum())    # log σ(−v_n·u)
+    loss = -(pos + negl)
+    opt.zero_grad(); loss.backward(); opt.step()
+    if step % 50 == 0:
+        print(step, round(loss.item(), 4))
+
+print("pairs:", len(pairs), "vocab:", len(vocab))</code></pre>
+      </div>
+    </div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Embedding dimension too small or large</p>
+        <p>
+          \(D=2\) cannot encode enough distinctions; a huge \(D\) with little data memorizes
+          noise and bloats the \(V D\) table. Choose \(D\) with validation, not by habit.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Not tying input/output weights</p>
+        <p>
+          In a language model, the input embedding and the output projection can share one matrix.
+          Leaving them untied doubles parameters and can weaken the learned geometry.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Training on a tiny corpus</p>
+        <p>
+          Fifty sentences cannot produce meaningful general-purpose embeddings. Either use a
+          pretrained table or accept that the vectors only encode those fifty sentences.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Confusing context and target</p>
+        <p>
+          In skip-gram the centre is the input and the window words are targets; in CBOW it is
+          reversed. Swapping them changes what the vectors mean.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “<code>nn.Embedding(1000, 64)</code> throws an index error when the batch
+      contains token ID 1000.”
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        Valid IDs are \(0,\dots,V-1\). A table with 1000 rows accepts IDs 0 through 999; ID 1000
+        is off by one. Either build the vocabulary with 1000 entries and remap the offending token,
+        or create <code>nn.Embedding(1001, 64, padding_idx=0)</code>. Check that the tokenizer's
+        vocabulary size and the model's <code>num_embeddings</code> come from the same object —
+        do not hard-code one and compute the other.
+      </p>
+      <p class="small muted">
+        Reserve row 0 for <code>&lt;pad&gt;</code> and pass <code>padding_idx=0</code> so its
+        gradient stays zero.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m2-05">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — embeddings",
+        "questions": [
+          {
+            "q": "What does an nn.Embedding(V, D) layer store?",
+            "options": [
+              "V matrices of size D×D",
+              "A V×D table with one learned vector per token ID",
+              "Only the D most frequent tokens",
+              "A fixed one-hot encoding"
+            ],
+            "correct": 1,
+            "why": [
+              "That would be far more parameters.",
+              "Correct: row w is the vector for token w; the table has V·D parameters.",
+              "All V IDs get a row.",
+              "One-hot vectors are fixed; embeddings are learned."
+            ]
+          },
+          {
+            "q": "In skip-gram, what is the input and what is the target?",
+            "options": [
+              "Context → centre word",
+              "Centre word → each context word in the window",
+              "Sentence → sentiment label",
+              "Word → its part of speech"
+            ],
+            "correct": 1,
+            "why": [
+              "That describes CBOW.",
+              "Correct: skip-gram predicts surrounding words from the centre.",
+              "That is a classifier, not word2vec.",
+              "That is tagging."
+            ]
+          },
+          {
+            "q": "With u_w=(1,0), v_c=(2,1), v_n=(−1,0) and K=1, what is the negative-sampling loss?",
+            "options": ["0.127", "0.313", "0.440", "1.000"],
+            "correct": 2,
+            "why": [
+              "That is only the positive term.",
+              "That is only the negative term.",
+              "Correct: −log σ(2) − log σ(1) = 0.127 + 0.313 = 0.440.",
+              "That ignores the logarithms."
+            ]
+          },
+          {
+            "q": "What does cosine similarity between two embedding vectors measure?",
+            "options": [
+              "The difference of their norms",
+              "The angle via dot product divided by both norms",
+              "Their index distance in the vocabulary",
+              "Their frequency in the corpus"
+            ],
+            "correct": 1,
+            "why": [
+              "Norm difference is not angle.",
+              "Correct: cos = (a·b)/(|a||b|); it is invariant to scaling.",
+              "ID order is arbitrary.",
+              "Frequency is not encoded by cosine."
+            ]
+          },
+          {
+            "q": "For v_king=(3,1) and v_queen=(2.8,2.6), what is cos(king, queen)?",
+            "options": ["0.910", "0.763", "1.000", "0.500"],
+            "correct": 0,
+            "why": [
+              "Correct: dot 11 divided by √10·√14.6 ≈ 12.083 gives 0.9104.",
+              "That is tanh(1), unrelated to this computation.",
+              "The vectors are similar but not identical.",
+              "That ignores the normalization."
+            ]
+          },
+          {
+            "q": "What does FastText add to word vectors?",
+            "options": [
+              "A larger hidden state",
+              "Subword information, so unseen words can be composed",
+              "A causal mask",
+              "Global minibatch normalization"
+            ],
+            "correct": 1,
+            "why": [
+              "Hidden width belongs to the downstream model.",
+              "Correct: a word vector is built from its character n-grams.",
+              "That is an attention mechanism.",
+              "That is a training trick unrelated to embeddings."
+            ]
+          },
+          {
+            "q": "With V = 30,000 and D = 512, how many parameters are in the embedding table?",
+            "options": ["30,512", "15,360,000", "512,000", "30,000"],
+            "correct": 1,
+            "why": [
+              "That adds instead of multiplies.",
+              "Correct: 30,000 × 512 = 15,360,000.",
+              "That uses V = 1,000.",
+              "That counts only rows."
+            ]
+          },
+          {
+            "q": "nn.Embedding(1000, 64) receives token ID 1000. What happens?",
+            "options": [
+              "It wraps to row 0",
+              "It silently ignores the token",
+              "It raises an index error — valid IDs are 0…999",
+              "It creates a new row automatically"
+            ],
+            "correct": 2,
+            "why": [
+              "PyTorch does not wrap indices.",
+              "No token is ignored; the lookup fails.",
+              "Correct: the table has 1000 rows indexed 0 through 999.",
+              "Tables are fixed size at construction."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · An embedding matrix \(E\in\mathbb{R}^{V\times D}\) is a learned lookup: onehot(w)E selects row w.<br>
+        2 · Skip-gram predicts context from centre; negative sampling costs −log σ(v·u) − log σ(−vₙ·u), here 0.440.<br>
+        3 · Cosine measures angle, not magnitude: cos(king, queen) = 11/(√10·√14.6) = 0.9104 on the hand-built vectors.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m2-05">
+      <h2>Cheat sheet — M2·05</h2>
+      <ul>
+        <li>Lookup: \(\mathbf{v}_w=\mathrm{onehot}(w)E\), \(E\in\mathbb{R}^{V\times D}\), \(VD\) parameters.</li>
+        <li>Skip-gram softmax: \(p(c\mid w)=\exp(v_c\cdot u_w)/\sum_{c'}\exp(v_{c'}\cdot u_w)\).</li>
+        <li>Negative sampling: \(-\log\sigma(v_c\cdot u_w)-\sum_{k=1}^{K}\log\sigma(-v_{n_k}\cdot u_w)\).</li>
+        <li>Cosine: \(\cos(a,b)=(a\cdot b)/(\lVert a\rVert\lVert b\rVert)\); worked value 0.9104.</li>
+        <li>CBOW: context → centre. Skip-gram: centre → context. GloVe: co-occurrence matrix. FastText: character n-grams.</li>
+        <li>Valid embedding IDs are \(0,\dots,V-1\); reserve row 0 for padding.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Mikolov, T. — <em>Efficient Estimation of Word Representations in Vector Space</em> (2013).</li>
+      <li>Pennington, J. — <em>GloVe: Global Vectors for Word Representation</em> (2014).</li>
+      <li>Bojanowski, P. — <em>Enriching Word Vectors with Subword Information</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m2-04-tokenization.html">← Tokenization</a>
+      <a href="m2-06-sentiment-lstm.html">Next: sentiment LSTM →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M2 Sequences &amp; NLP</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m2-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

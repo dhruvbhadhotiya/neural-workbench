@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hyperparameter search and augmentation · DeepLearn Lab</title>
+<meta name="description" content="Grid versus random search, Bayesian ideas and Hyperband, plus a live image-augmentation studio with mixup, CutMix and test-time augmentation.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m1" data-lesson="m1-06" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="index.html" aria-current="page">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 1 · CNNs</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M1 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m1-06">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M1 CNNs</a> / <span>Tuning & augmentation</span>
+    </nav>
+
+    <h1>Hyperparameter search and augmentation</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 6 of 8 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">At ten GPU-hours per trial, how you choose hyperparameters matters as much as which values you choose. Augmentation is the other cheap regulariser: it changes the data, not the model.</p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+          <li>Compare grid, random, Bayesian and Hyperband search using a fixed budget.</li>
+          <li>Explain why random search covers an important low-dimensional subspace well.</li>
+          <li>Compute mixup and cutout transformations with explicit numbers.</li>
+          <li>Build an augmentation pipeline and state the rules for test-time augmentation.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>GridSearchCV over five parameters already costs many fits; with deep models each fit is expensive. The search problem becomes a budget-allocation problem. Augmentation is the deep-learning version of adding invariance to your estimator — except you generate the new examples.</p>
+    </aside>
+
+    <h2 id="intuition">Intuition: search the dimensions that matter</h2>
+
+    <p>
+      In most hyperparameter problems a couple of settings dominate the result — often learning
+      rate and weight decay — while others barely matter. A grid spends trials evenly on every
+      axis; random search gives every trial a fresh combination and therefore samples the
+      important axis many more times with the same budget. Bayesian methods fit a surrogate model
+      of the objective and spend trials where improvement looks likely. Hyperband trains many
+      configurations briefly and promotes the promising ones.
+    </p>
+    <p>
+      Augmentation applies the same thought to data: give the model many plausible versions of
+      each image so the invariances become part of the task. Crops, flips and colour jitter encode
+      “position, orientation and lighting should not change the label.” Mixup and CutMix go
+      further by mixing two examples and their labels.
+    </p>
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols</p>
+      <p>\(p\): fraction of the search range that matters · \(n\): number of trials ·
+      \(\tilde x\): mixed input · \(\lambda\sim\mathrm{Beta}(\alpha,\alpha)\): mix coefficient ·
+      \(y_i,y_j\): labels of two examples · \(\epsilon_{cut}\): cutout area fraction.</p>
+    </div>
+    
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="coverage">1 · Random-search coverage</h3>
+    <p>
+      If a fraction \(p\) of one axis contains useful values, one random trial misses it with
+      probability \(1-p\); \(n\) independent trials miss it with \((1-p)^n\):
+    </p>
+    \[ P(\text{at least one hit}) = 1-(1-p)^n \]
+    <p>
+      Worked: \(p=0.1, n=30\) gives \(1-0.9^{30}\approx1-0.0424 = 0.9576\), about a 96% chance.
+      A 30-point grid spread as 6×5 over two axes places only 6 distinct values on the important
+      axis. Search learning rate on a log scale: sampling \(\log_{10}\eta\) uniformly gives even
+      coverage of \(10^{-5}\) to \(10^{-1}\).
+    </p>
+
+    <h3 id="mixup">2 · Mixup and CutMix</h3>
+    \[ \tilde x = \lambda x_i + (1-\lambda)x_j, \qquad \tilde y = \lambda y_i + (1-\lambda)y_j \]
+    <p>
+      Worked with \(\lambda=0.3\), \(x_i=(1,2)\), \(x_j=(4,8)\):
+      \(\tilde x=(0.3\cdot1+0.7\cdot4,\;0.3\cdot2+0.7\cdot8)=(3.1,6.2)\).
+      A one-hot label is mixed in exactly the same proportions.
+    </p>
+    <p>
+      Cutout removes an \(8\times8\) patch from a \(32\times32\) image:
+      \(\epsilon_{cut}=64/1024=0.0625\), i.e. 6.25% of the pixels. CutMix replaces that patch
+      with the corresponding patch from another image and mixes labels by the patch-area ratio.
+    </p>
+
+    <h3 id="testing">3 · Test-time augmentation (TTA)</h3>
+    \[ \hat y = \frac{1}{M}\sum_{m=1}^{M} f(a_m(x)) \]
+    <p>
+      Worked with \(M=2\) and class-probability predictions \(p_1=(0.8,0.2)\),
+      \(p_2=(0.6,0.4)\): the TTA prediction is \((0.7,0.3)\). This is only valid when every
+      \(a_m\) preserves the label — flipping traffic-sign images can change their meaning.
+    </p>
+    
+
+    <h2 id="lab">Hands-on labs</h2>
+    <p class="small muted">Every number below is computed in your browser from the inputs you can change.</p>
+<section class="lab" data-widget="m1-06-search-demo" data-badge="exact"
+         data-title="Grid versus random search"
+         data-note="Exact: both samplers use the stated budget and the objective is evaluated at every trial with the same formula.">
+  <div class="lab__body"></div>
+</section>
+
+<section class="lab" data-widget="m1-06-augmentation-studio" data-badge="exact"
+         data-title="Augmentation studio"
+         data-note="Exact: crops, flips, colour shifts, cutout, mixup and CutMix are applied pixel by pixel to the procedural image; TTA averages real toy predictions.">
+  <div class="lab__body"></div>
+</section>
+
+    <h2 id="code">Code</h2>
+<div class="tabs" data-tabs>
+  <div class="tabs__list" role="tablist">
+    <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+    <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+  </div>
+  <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torchvision import transforms as T
+from torchvision.transforms import v2
+
+train_tf = v2.Compose([
+    v2.RandomResizedCrop(32, scale=(0.6, 1.0)),   # input (3,32,32) -&gt; (3,32,32)
+    v2.RandomHorizontalFlip(p=0.5),
+    v2.ColorJitter(brightness=0.2, contrast=0.2),
+    v2.ToTensor(),
+    v2.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+])
+val_tf = v2.Compose([v2.ToTensor(),
+                     v2.Normalize((0.5,)*3, (0.5,)*3)])  # no random ops
+
+# Mixup / CutMix operate on a batch: x (N,3,32,32), y (N,) class indices
+mix = v2.MixUp(alpha=0.2, num_classes=10)
+cut = v2.CutMix(alpha=1.0, num_classes=10)
+xb, yb = torch.randn(8, 3, 32, 32), torch.randint(0, 10, (8,))
+xm, ym = mix(xb, yb)     # ym is (8,10), softly mixed labels
+xc, yc = cut(xb, yb)     # a rectangular patch is swapped between images
+
+# Random search on a log scale for LR, linear for weight decay
+import numpy as np
+rng = np.random.default_rng(0)
+trials = [(10 ** rng.uniform(-5, -1), rng.uniform(1e-6, 1e-2)) for _ in range(30)]
+print(trials[0])</code></pre>
+  </div>
+  <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import keras_tuner as kt
+from tensorflow import keras
+
+def build(hp):
+    lr = hp.Float("lr", 1e-5, 1e-1, sampling="log")   # log scale!
+    wd = hp.Float("wd", 1e-6, 1e-2)
+    inputs = keras.Input((32, 32, 3))                 # NHWC in Keras
+    x = keras.layers.RandomFlip("horizontal")(inputs)
+    x = keras.layers.RandomCrop(32, 4)(x)
+    x = keras.layers.Conv2D(hp.Int("filters", 16, 64, step=16), 3,
+                            padding="same", activation="relu")(x)
+    x = keras.layers.GlobalAveragePooling2D()(x)
+    outputs = keras.layers.Dense(10)(x)
+    model = keras.Model(inputs, outputs)
+    model.compile(optimizer=keras.optimizers.AdamW(lr, weight_decay=wd),
+                  loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True))
+    return model
+
+tuner = kt.RandomSearch(build, objective="val_loss", max_trials=30,
+                        directory="tune", project_name="cifar")
+# For a fixed budget with early promotion, swap in kt.Hyperband(...).
+# tuner.search(X_train, y_train, validation_split=0.2, epochs=20)
+# print(tuner.get_best_hyperparameters(1)[0].values)</code></pre>
+  </div>
+</div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Searching LR linearly</p>
+        <p>Learning rate spans orders of magnitude. Sample log10(lr) uniformly; a linear sweep from 0 to 0.1 wastes most trials on unusably large values.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Augmenting before normalisation incorrectly</p>
+        <p>Colour jitter belongs on raw or unnormalised images; applying brightness changes after subtracting the dataset mean shifts values in the wrong space.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Label-semantics-changing TTA</p>
+        <p>Vertical flips, 180° rotations or hue shifts can change the target for digits, signs and medical images. Only average predictions over label-preserving views.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">No seed control</p>
+        <p>Search and augmentation both use randomness. Seed the sampler and the pipeline so trials are comparable and results reproducible.</p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+    <p>
+      A reader adds TTA with horizontal and vertical flips to a classifier for the letter “b” versus “d”,
+      and validation accuracy drops.
+    </p>
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        A vertical flip maps “b” to something like “p” and a horizontal flip maps it to “d” —
+        the augmentations changed the label. Averaging those predictions mixes evidence for
+        different classes. Keep TTA to transformations that preserve the label (small crops,
+        mild colour changes when colour is irrelevant, horizontal flips only for objects whose
+        left-right orientation is not semantic).
+      </p>
+      <p class="small muted">Check by displaying a few augmented images with their labels before trusting a TTA score.</p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+    <section class="quiz" data-quiz="m1-06">
+      <script type="application/json" class="quiz__data">
+{
+  "title": "Check yourself — Tuning & augmentation",
+  "questions": [
+    {
+      "q": "With p=0.1 and n=30 random trials, P(at least one useful setting) is about:",
+      "options": [
+        "0.04",
+        "0.5",
+        "0.96",
+        "1.0 exactly"
+      ],
+      "correct": 2,
+      "why": [
+        "That is the miss probability 0.9^30.",
+        "Too low.",
+        "Correct: 1−0.9^30 ≈ 0.9576.",
+        "Probabilities are not exactly 1 with finite trials."
+      ]
+    },
+    {
+      "q": "Why does random search often beat a grid at the same trial count?",
+      "options": [
+        "It uses gradients",
+        "It tries more distinct values along the few dimensions that matter",
+        "It always finds the global optimum",
+        "It skips validation"
+      ],
+      "correct": 1,
+      "why": [
+        "Random search is gradient-free.",
+        "Correct: many trial values on important axes instead of a full cross-product.",
+        "No finite search guarantees that.",
+        "Validation is still required."
+      ]
+    },
+    {
+      "q": "Mixup with lambda=0.3, x_i=(1,2), x_j=(4,8) gives:",
+      "options": [
+        "(2.5,5)",
+        "(3.1,6.2)",
+        "(1.3,2.6)",
+        "(4,8)"
+      ],
+      "correct": 1,
+      "why": [
+        "That is lambda=0.5.",
+        "Correct: 0.3·(1,2)+0.7·(4,8) = (3.1,6.2).",
+        "Only the first image is scaled.",
+        "That is x_j alone."
+      ]
+    },
+    {
+      "q": "Cutout of 8×8 on a 32×32 image removes what fraction of pixels?",
+      "options": [
+        "0.0625",
+        "0.25",
+        "0.125",
+        "0.5"
+      ],
+      "correct": 0,
+      "why": [
+        "Correct: 64/1024 = 0.0625.",
+        "That would be a 16×16 hole.",
+        "That would be 8×32.",
+        "Far too large."
+      ]
+    },
+    {
+      "q": "Hyperband's main idea is:",
+      "options": [
+        "Fit a Gaussian process to all trials",
+        "Allocate more budget to promising configurations after cheap screening",
+        "Use a fixed grid",
+        "Average many predictions at test time"
+      ],
+      "correct": 1,
+      "why": [
+        "That is Bayesian optimisation.",
+        "Correct: many cheap trials, then promotion.",
+        "That is grid search.",
+        "That is TTA."
+      ]
+    },
+    {
+      "q": "Which search value should be sampled on a log scale?",
+      "options": [
+        "Batch size",
+        "Learning rate",
+        "Number of workers",
+        "Image width"
+      ],
+      "correct": 1,
+      "why": [
+        "Usually a small set of powers of two.",
+        "Correct: LR spans orders of magnitude.",
+        "Not a continuous hyperparameter here.",
+        "Usually a few discrete choices."
+      ]
+    },
+    {
+      "q": "TTA with p1=(0.8,0.2) and p2=(0.6,0.4) gives:",
+      "options": [
+        "(0.8,0.2)",
+        "(0.6,0.4)",
+        "(0.7,0.3)",
+        "(1.4,0.6)"
+      ],
+      "correct": 2,
+      "why": [
+        "Only one view is used.",
+        "Only the other view is used.",
+        "Correct: the mean is (0.7,0.3).",
+        "That is a sum, not an average."
+      ]
+    },
+    {
+      "q": "A safe TTA transform for a left/right-sensitive sign classifier is:",
+      "options": [
+        "Vertical flip",
+        "Horizontal flip",
+        "Small centre crop",
+        "180° rotation"
+      ],
+      "correct": 2,
+      "why": [
+        "Changes the symbol.",
+        "Can change the symbol's meaning.",
+        "Correct: a small crop keeps the label.",
+        "Changes orientation."
+      ]
+    }
+  ]
+}
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+    <div class="keyidea">
+      <p>
+1 · Random search samples promising axes repeatedly: with p=0.1 and 30 trials the hit probability is 1−0.9^30≈0.96; Bayesian methods model the objective and Hyperband promotes survivors.<br>
+2 · Mixup mixes inputs and labels with lambda: (1,2) and (4,8) at lambda=0.3 give (3.1,6.2); an 8×8 cutout on 32×32 removes 6.25% of pixels.<br>
+3 · TTA averages predictions over label-preserving views only; seeds and correct normalisation order make search and augmentation reproducible.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m1-06">
+      <h2>Cheat sheet — M1·06</h2>
+      <ul>
+          <li>Random coverage: \(P(\text{hit})=1-(1-p)^n\); \(p=0.1,n=30\Rightarrow0.9576\).</li>
+          <li>Mixup: \(\tilde x=\lambda x_i+(1-\lambda)x_j\), \(\tilde y=\lambda y_i+(1-\lambda)y_j\).</li>
+          <li>Worked: \(\lambda=0.3\Rightarrow(3.1,6.2)\).</li>
+          <li>Cutout area fraction: \(8\cdot8/(32\cdot32)=0.0625\).</li>
+          <li>Sample \(\log_{10}\eta\) uniformly, not \(\eta\).</li>
+          <li>TTA: \(\hat y=\frac1M\sum_m f(a_m(x))\) for label-preserving \(a_m\).</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+        <li>Bergstra, J. — <em>Random Search for Hyper-parameter Optimization</em> (2012).</li>
+        <li>Snoek, J. — <em>Practical Bayesian Optimization of Machine Learning Algorithms</em> (2012).</li>
+        <li>Li, L. — <em>Hyperband: A Novel Bandit-Based Approach to Hyperparameter Optimization</em> (2016).</li>
+        <li>Zhang, H. — <em>mixup: Beyond Empirical Risk Minimization</em> (2017).</li>
+        <li>Yun, S. — <em>CutMix: Regularization Strategy to Train Strong Classifiers with Localizable Features</em> (2019).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m1-05-training-cnn.html">← Previous: Training a CNN</a>
+      <a href="m1-07-object-detection.html">Next: Object detection →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M1 CNNs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m1-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

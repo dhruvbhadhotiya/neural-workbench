@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tokenization: BPE, WordPiece, SentencePiece · DeepLearn Lab</title>
+<meta name="description" content="Run byte-pair merges by hand on low lower lowest, understand vocabulary trade-offs and OOV, and train a tiny BPE tokenizer in pure Python.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m2" data-lesson="m2-04" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="index.html" aria-current="page">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 2 · Sequences &amp; NLP</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M2 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m2-04">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M2 Sequences &amp; NLP</a> / <span>Tokenization</span>
+    </nav>
+
+    <h1>Tokenization: subwords you can count</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 4 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Before a neural network can read a word, it must split text into IDs. BPE is a simple,
+      countable compression algorithm — you can run its merges on a scrap of paper and get the
+      same vocabulary the code gets.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Run BPE merges by hand on <code>low lower lowest</code> and count the vocabulary.</li>
+        <li>Compute pair frequency and compression ratio with concrete numbers.</li>
+        <li>Explain WordPiece's <code>##</code> marker, SentencePiece's whitespace handling and OOV fallback.</li>
+        <li>Choose a vocabulary size and avoid train/test tokenizer leakage.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        Classical NLP used a fixed feature vocabulary: one column per word, everything else mapped
+        to “unknown”. Subword tokenizers <em>learn</em> that vocabulary from the training corpus,
+        compressing common strings into single tokens while still being able to spell rare ones.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: merge the most common pair</h2>
+
+    <p>
+      Start with characters plus an end-of-word marker. Count every adjacent pair, merge the most
+      frequent one into a new symbol, and repeat. Common prefixes like <code>lo</code> become one
+      token after a few steps; rare words remain a short chain of pieces. Nothing probabilistic is
+      happening — the algorithm is a deterministic loop over counts.
+    </p>
+
+    <p>
+      The vocabulary budget is a knob. A small vocabulary keeps the embedding matrix cheap but
+      produces long token sequences and more <code>&lt;unk&gt;</code>; a large one gives short
+      sequences and a bigger lookup table. Byte-level BPE guarantees zero unknown tokens by
+      falling back to the 256 byte symbols.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        A tokenizer is a learned compression scheme. BPE spends its vocabulary budget on the pairs
+        that save the most tokens; everything else is spelled out.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="symbols">0 · Symbols</h3>
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <ul>
+        <li>\(V\): vocabulary size (number of distinct symbols, including special tokens).</li>
+        <li>\(c(a,b)\): frequency of the adjacent pair \((a,b)\) in the corpus, counted over symbol sequences.</li>
+        <li>\(N_0\): number of symbols before merging; \(N_k\): after \(k\) merges.</li>
+        <li>\(r = N_0/N_k\): compression ratio; \(\text{EOW}=\text{&lt;/w&gt;}\) marks a word boundary.</li>
+      </ul>
+    </aside>
+
+    <h3 id="bpe">1 · The BPE merge rule</h3>
+
+    \[ (a^\star,b^\star)=\arg\max_{(a,b)} c(a,b),\qquad
+       \text{new symbol}=a^\star b^\star \]
+
+    <p>
+      Ties are broken deterministically (this course uses the lexicographically smaller
+      concatenation). Each merge replaces every occurrence of that adjacent pair in every word and
+      adds one symbol to the vocabulary.
+    </p>
+
+    <p><strong>Worked example — <code>low lower lowest</code>, four merges.</strong> Start:</p>
+
+    <table class="shape-table">
+      <caption>Initial sequences; EOW = &lt;/w&gt;</caption>
+      <thead><tr><th>word</th><th>symbols</th><th>length</th></tr></thead>
+      <tbody>
+        <tr><td>low</td><td>l o w EOW</td><td>4</td></tr>
+        <tr><td>lower</td><td>l o w e r EOW</td><td>6</td></tr>
+        <tr><td>lowest</td><td>l o w e s t EOW</td><td>7</td></tr>
+      </tbody>
+    </table>
+
+    <p>\(N_0=4+6+7=17\). Initial vocabulary: <code>{l,o,w,e,r,s,t,EOW}</code>, so \(V_0=8\).</p>
+
+    <table class="shape-table">
+      <caption>Exact merge order and counts</caption>
+      <thead><tr><th>step</th><th>pair</th><th>count</th><th>new</th><th>V / tokens</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>l + o</td><td>3</td><td>lo</td><td>9 / 14</td></tr>
+        <tr><td>2</td><td>lo + w</td><td>3</td><td>low</td><td>10 / 11</td></tr>
+        <tr><td>3</td><td>low + e</td><td>2</td><td>lowe</td><td>11 / 10</td></tr>
+        <tr><td>4</td><td>low + EOW</td><td>1</td><td>low&lt;/w&gt;</td><td>12 / 8</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Step 1 breaks a 3–3 tie between (l,o) and (o,w) because “lo” sorts first; step 4 breaks a
+      five-way 1–1 tie because “low&lt;/w&gt;” sorts before “lower”, “lowes”, “st” and “t&lt;/w&gt;”.
+      After step 1 the sequences are <code>lo w EOW</code>, <code>lo w e r EOW</code>,
+      <code>lo w e s t EOW</code>; after step 4 they are <code>low&lt;/w&gt;</code>,
+      <code>lowe r EOW</code>, <code>lowe s t EOW</code>. The compression ratio is
+      \(r = N_0/N_4 = 17/8 = 2.125\). Encoding a new word <code>lowest</code> with these four
+      merges gives <code>lowe s t EOW</code> — four tokens.
+    </p>
+
+    <section class="lab" data-widget="m2-04-bpe-trainer" data-badge="exact"
+             data-title="Tiny BPE trainer"
+             data-note="Exact: pair frequencies, tie-breaking, merge order, vocabulary growth and the encoding of a new word are computed in the browser from the corpus you type.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="variants">2 · WordPiece and SentencePiece</h3>
+
+    <p>
+      <strong>WordPiece</strong> also merges pairs, but chooses by the training likelihood gain
+      rather than raw frequency, and marks non-initial pieces with <code>##</code>. For example
+      <code>playing</code> might become <code>play ##ing</code>; the marker tells the decoder that
+      <code>##ing</code> attaches to the previous piece.
+    </p>
+
+    <p>
+      <strong>SentencePiece</strong> trains directly on raw text (whitespace is just another
+      character, usually escaped as <code>▁</code>) so it does not need language-specific
+      pre-tokenization. Byte-level BPE starts from 256 bytes, so every Unicode string has a valid
+      encoding and <code>&lt;unk&gt;</code> is unnecessary.
+    </p>
+
+    <h3 id="vocab">3 · Vocabulary size and special tokens</h3>
+
+    <p>
+      With \(V\) symbols and embedding width \(D\), the embedding table has \(V\cdot D\)
+      parameters. Worked: \(V=30{,}000\), \(D=512\) gives \(30{,}000\cdot512=15{,}360{,}000\)
+      parameters — before any decoder projection. Budget special tokens explicitly: if you need
+      <code>&lt;pad&gt;</code>, <code>&lt;bos&gt;</code>, <code>&lt;eos&gt;</code> and
+      <code>&lt;unk&gt;</code>, only \(V-4\) slots remain for learned subwords.
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>The whole trainer fits in a short pure-Python function; no external package is needed.</p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch / pure Python</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">tokenizers</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>from collections import Counter
+
+def bpe(corpus, n_merges=4):
+    words = [list(w) + ["&lt;/w&gt;"] for w in corpus.split()]
+    vocab = sorted({s for w in words for s in w})
+    merges = []
+    for _ in range(n_merges):
+        counts = Counter()
+        for w in words:
+            counts.update(zip(w, w[1:]))
+        if not counts:
+            break
+        # highest count; ties broken by the smaller concatenated string
+        pair = min(counts, key=lambda p: (-counts[p], p[0] + p[1]))
+        merges.append(pair)
+        new = "".join(pair)
+        if new not in vocab:
+            vocab.append(new)
+        merged = []
+        for w in words:
+            out, i = [], 0
+            while i &lt; len(w):
+                if i + 1 &lt; len(w) and tuple(w[i:i+2]) == pair:
+                    out.append(new); i += 2
+                else:
+                    out.append(w[i]); i += 1
+            merged.append(out)
+        words = merged
+    return words, vocab, merges
+
+words, vocab, merges = bpe("low lower lowest", 4)
+print("merges:", merges)      # [('l','o'), ('lo','w'), ('low','e'), ('low','&lt;/w&gt;')]
+print("vocab size:", len(vocab))   # 12
+print("tokens:", sum(len(w) for w in words))  # 8 (= 17 − 3 − 3 − 2 − 1)
+
+def encode(word, merges):
+    seq = list(word) + ["&lt;/w&gt;"]
+    for a, b in merges:
+        out, i = [], 0
+        while i &lt; len(seq):
+            if i + 1 &lt; len(seq) and seq[i] == a and seq[i+1] == b:
+                out.append(a + b); i += 2
+            else:
+                out.append(seq[i]); i += 1
+        seq = out
+    return seq
+
+print(encode("lowest", merges))    # ['lowe', 's', 't', '&lt;/w&gt;']
+
+# The resulting IDs would feed an embedding lookup:
+# ids = [token_to_id[t] for t in encode("lowest", merges)]</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code># pip install tokenizers   (inside this course: example only, no download at runtime)
+from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+
+tok = Tokenizer(models.BPE(unk_token="&lt;unk&gt;"))
+tok.pre_tokenizer = pre_tokenizers.Whitespace()
+trainer = trainers.BpeTrainer(
+    vocab_size=1000,
+    special_tokens=["&lt;pad&gt;", "&lt;unk&gt;", "&lt;bos&gt;", "&lt;eos&gt;"],
+)
+tok.train_from_file("train.txt", trainer=trainer)   # TRAIN split only!
+
+ids = tok.encode("low lower lowest").ids
+print(len(ids), tok.decode(ids))
+print(tok.token_to_id("&lt;pad&gt;"), tok.vocab_size)
+
+# Byte-level BPE has a byte fallback, so every string is encodable:
+from tokenizers import decoders
+tok.decoder = decoders.BPEDecoder(suffix="&lt;/w&gt;")</code></pre>
+      </div>
+    </div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Tokenizer leakage</p>
+        <p>
+          Training BPE on train + test text leaks test vocabulary statistics into the pipeline.
+          Fit the tokenizer on the training split only, then apply it unchanged to validation and test.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Tokens are not words</p>
+        <p>
+          One word can become several tokens. Sequence lengths, attention masks and label
+          alignment (for tagging) must be computed after tokenization, not before.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting special tokens</p>
+        <p>
+          If <code>&lt;pad&gt;</code> and <code>&lt;bos&gt;</code> are not reserved, training can
+          assign them ordinary IDs and the model learns from padding. Reserve them before training.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Vocabulary too small</p>
+        <p>
+          A tiny \(V\) leaves most words as long rare-piece chains and makes
+          <code>&lt;unk&gt;</code> common. Check the unknown rate on held-out text, not training text.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “I set <code>vocab_size=1000</code> but <code>&lt;unk&gt;</code> dominates my
+      validation set.” The tokenizer was trained normally, with no byte fallback.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The merge budget was exhausted before common validation subwords were learned — or the
+        trainer stopped early because the requested \(V\) included four special tokens but the
+        corpus could only supply a few hundred useful merges. Raise \(V\), train on more in-domain
+        text, or switch to byte-level BPE with a byte fallback so no input can map entirely to
+        <code>&lt;unk&gt;</code>. Also confirm that <code>&lt;unk&gt;</code> is reserved and that
+        you are not feeding the tokenizer raw Unicode bytes through an ASCII-only alphabet.
+      </p>
+      <p class="small muted">
+        Measure the unknown-token rate on text the tokenizer never saw; a low training rate can
+        hide a severe held-out failure.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m2-04">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — tokenization",
+        "questions": [
+          {
+            "q": "For the corpus 'low lower lowest', what is the first BPE merge with the tie-break used in this lesson?",
+            "options": ["(o, w) → ow", "(l, o) → lo", "(w, e) → we", "(low, e) → lowe"],
+            "correct": 1,
+            "why": [
+              "It also has count 3, but 'lo' sorts before 'ow'.",
+              "Correct: (l,o) and (o,w) both occur 3 times; 'lo' is lexicographically smaller.",
+              "That pair occurs only twice.",
+              "That merge is possible only after two earlier merges."
+            ]
+          },
+          {
+            "q": "After four merges on 'low lower lowest', how many symbols remain?",
+            "options": ["17", "12", "8", "4"],
+            "correct": 2,
+            "why": [
+              "That is the initial character count N₀.",
+              "That is the vocabulary size V₄, not the token count.",
+              "Correct: the words become low</w> (1), lowe r </w> (3), lowe s t </w> (4): 8 total.",
+              "That is the number of words in the corpus."
+            ]
+          },
+          {
+            "q": "What is the compression ratio after those four merges?",
+            "options": ["17 / 8 = 2.125", "8 / 17 = 0.47", "12 / 8 = 1.5", "4 / 12 = 0.33"],
+            "correct": 0,
+            "why": [
+              "Correct: r = N₀/Nₖ = 17/8 = 2.125.",
+              "That is the inverse of the defined ratio.",
+              "That compares vocabulary size to token count, which is not compression.",
+              "That compares word count to vocabulary size."
+            ]
+          },
+          {
+            "q": "What does the '##' marker mean in WordPiece?",
+            "options": [
+              "The token is unknown",
+              "The piece continues the previous word rather than starting one",
+              "The token is a special symbol",
+              "The piece must be uppercased"
+            ],
+            "correct": 1,
+            "why": [
+              "Unknown tokens use <unk>.",
+              "Correct: '##ing' attaches to the preceding piece, e.g. play + ##ing.",
+              "Special tokens use names like <pad> and <bos>.",
+              "Casing is handled separately by normalisation."
+            ]
+          },
+          {
+            "q": "Why does SentencePiece not need language-specific pre-tokenization?",
+            "options": [
+              "It uses only byte pairs",
+              "It treats whitespace as part of the raw text and escapes it",
+              "It never produces subwords",
+              "It requires a dictionary instead"
+            ],
+            "correct": 1,
+            "why": [
+              "That describes byte-level BPE, not SentencePiece's defining feature.",
+              "Correct: whitespace is modelled as a regular symbol (often ▁).",
+              "It is explicitly a subword method.",
+              "It learns its vocabulary from the corpus."
+            ]
+          },
+          {
+            "q": "With V = 30,000 and embedding width D = 512, how many embedding parameters are there?",
+            "options": ["15,360", "30,512", "15,360,000", "512,000"],
+            "correct": 2,
+            "why": [
+              "That omits the embedding dimension.",
+              "That adds rather than multiplies the two quantities.",
+              "Correct: 30,000 × 512 = 15,360,000.",
+              "That uses V = 1,000 instead of 30,000."
+            ]
+          },
+          {
+            "q": "Why is fitting the tokenizer on the full dataset before splitting a bug?",
+            "options": [
+              "It increases the embedding width",
+              "It leaks test-set vocabulary statistics into training",
+              "It makes merges deterministic",
+              "It disables special tokens"
+            ],
+            "correct": 1,
+            "why": [
+              "Embedding width is a model choice, independent of fitting.",
+              "Correct: the test text influences which merges exist, so evaluation is no longer clean.",
+              "BPE is deterministic either way.",
+              "Special tokens are reserved by the trainer configuration."
+            ]
+          },
+          {
+            "q": "Which approach guarantees that no input string needs an <unk> token?",
+            "options": [
+              "Word-level vocabulary with a fixed size",
+              "Byte-level BPE with a byte fallback",
+              "Whitespace pre-tokenization",
+              "Choosing a larger hidden size"
+            ],
+            "correct": 1,
+            "why": [
+              "Word-level vocabularies always need an unknown fallback.",
+              "Correct: 256 byte symbols can encode any string, so every input has a representation.",
+              "That only defines word boundaries.",
+              "Hidden size does not affect the token vocabulary."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · BPE repeatedly merges the most frequent adjacent pair; on low lower lowest the order is lo → low → lowe → low&lt;/w&gt;.<br>
+        2 · That grows V from 8 to 12 and compresses 17 symbols to 8, a ratio of 2.125.<br>
+        3 · Fit on train only, reserve special tokens, and use byte fallback if unknown tokens must vanish.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m2-04">
+      <h2>Cheat sheet — M2·04</h2>
+      <ul>
+        <li>\((a^\star,b^\star)=\arg\max c(a,b)\); new symbol \(a^\star b^\star\); tie-break by smaller concatenation.</li>
+        <li>\(\text{EOW}=&lt;/w&gt;\); BPE on low lower lowest: lo, low, lowe, low&lt;/w&gt; → \(V=12\).</li>
+        <li>\(r=N_0/N_k\): here \(17/8=2.125\). Embedding parameters \(=V D\); V=30,000, D=512 → 15,360,000.</li>
+        <li>WordPiece uses <code>##</code> for continuation pieces; SentencePiece models whitespace as a symbol.</li>
+        <li>Byte-level BPE has a 256-byte fallback → no <code>&lt;unk&gt;</code>.</li>
+        <li>Always fit the tokenizer on the training split only; reserve <code>&lt;pad&gt;</code>, <code>&lt;bos&gt;</code>, <code>&lt;eos&gt;</code>, <code>&lt;unk&gt;</code>.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Sennrich, R. — <em>Neural Machine Translation of Rare Words with Subword Units</em> (2015).</li>
+      <li>Schuster, M. — <em>Japanese and Korean Voice Search</em> (2012).</li>
+      <li>Kudo, T. — <em>SentencePiece: A Simple and Language Independent Subword Tokenizer and Detokenizer for Neural Text Processing</em> (2018).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m2-03-lstm-and-gru.html">← LSTM and GRU</a>
+      <a href="m2-05-embeddings.html">Next: embeddings →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M2 Sequences &amp; NLP</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m2-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

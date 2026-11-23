@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BERT: masked language modelling and fine-tuning · DeepLearn Lab</title>
+<meta name="description" content="Understand WordPiece tokens, masked language modelling, next-sentence prediction, contextual vectors and classification heads with worked softmax arithmetic.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m4" data-lesson="m4-03" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="index.html" aria-current="page">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 4 · Autoencoders</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M4 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m4-03">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M4 Autoencoders</a> / <span>BERT</span>
+    </nav>
+
+    <h1>BERT: contextual vectors from masked language modelling</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 3 of 5 <span class="dot">·</span>
+      <span class="badge badge--illustrative">Illustrative</span> lab
+    </p>
+    <p class="lede">
+      Word2Vec gives one fixed vector per word. BERT gives one vector per <em>token in context</em> —
+      and it learns that context by hiding words and asking the model to recover them.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Explain masked language modelling (MLM) and next-sentence prediction (NSP) from their losses.</li>
+        <li>Read WordPiece tokens, special tokens and an attention mask in a fixed input sequence.</li>
+        <li>Compute an MLM softmax over a 5-token vocabulary and the cross-entropy at the true token.</li>
+        <li>Attach a classification head to \([\text{CLS}]\) and fine-tune with a small learning rate.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        A bag-of-words classifier ignores order; a Word2Vec embedding gives the same vector for
+        “bank” in every sentence. BERT stacks bidirectional transformer encoder blocks, so the
+        vector for a token is a function of its <em>whole</em> input sequence. Pretraining is
+        self-supervised (no human labels), and a small task-specific head turns those contextual
+        vectors into predictions.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: hide a word, predict a word</h2>
+
+    <p>
+      A BERT input is a sequence of tokens. \([\text{CLS}]\) starts it, \([\text{SEP}]\) separates
+      segments, and WordPiece splits rare words into subwords marked with <code>##</code>. Each input
+      token is the sum of a token embedding, a segment embedding (which sentence it belongs to) and
+      a positional embedding. The transformer encoder applies self-attention, so every output
+      vector can see every input token — unlike the causal model we will meet in Lesson 4.
+    </p>
+
+    <p>
+      During pretraining, about 15% of tokens are replaced by \([\text{MASK}]\) and the model must
+      predict the original token at those positions. Because prediction uses both left and right
+      context, this is a <strong>masked</strong> language model, not an autoregressive one. The
+      second pretraining task, NSP, asks whether sentence B followed sentence A in the original
+      text; it uses the \([\text{CLS}]\) vector as a binary classifier input.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        BERT does not predict the next word. It fills blanks using both directions, and the vector
+        it produces for a token changes when the surrounding sentence changes — that is what
+        “contextual” means.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="mlm">1 · MLM loss and a 5-token softmax</h3>
+
+    <p>
+      Let \(M\) be the set of masked positions and \(V\) the vocabulary. For a masked position \(i\),
+      the encoder produces logits \(\mathbf z_i\in\mathbb R^{|V|}\); the probability of token \(w\)
+      is \(\mathrm{softmax}(\mathbf z_i)_w\). The loss averages cross-entropy over the masked
+      positions:
+    </p>
+
+    \[ \mathcal L_{\text{MLM}}=-\frac{1}{|M|}\sum_{i\in M}\log\,\mathrm{softmax}(\mathbf z_i)_{w_i},
+       \qquad \mathrm{softmax}(\mathbf z)_j=\frac{e^{z_j}}{\sum_{k\in V}e^{z_k}} \]
+
+    <p>
+      Here \(w_i\) is the true (hidden) token at position \(i\), and \(|V|\) is the vocabulary size.
+      The reduction is a mean over masked positions, not over every token in the sequence.
+    </p>
+
+    <p>
+      <strong>Worked example over a 5-token toy vocabulary.</strong> Let the logits at one masked
+      position be \(\mathbf z=(2,1,0,-1,-2)\) for tokens (cat, mat, dog, floor, sofa). The
+      exponentials are \((7.389,2.718,1.000,0.368,0.135)\), summing to \(11.610\). The probabilities
+      are \((0.6366,0.2341,0.0861,0.0317,0.0116)\). If the hidden token was “mat” (index 1), the
+      loss at this position is \(-\log 0.2341=1.452\) nats. If it was “cat”, the loss is only
+      \(-\log 0.6366=0.452\) nats. Temperature is 1 here; no scaling is applied.
+    </p>
+
+    <h3 id="attn">2 · Attention block recap</h3>
+
+    <p>
+      Each encoder block uses scaled dot-product attention with query \(Q\), key \(K\), value \(V\)
+      matrices and key dimension \(d_k\):
+    </p>
+
+    \[ \mathrm{Attention}(Q,K,V)=\mathrm{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V \]
+
+    <p>
+      \(Q,K,V\in\mathbb R^{T\times d_k}\) for \(T\) tokens; dividing by \(\sqrt{d_k}\) keeps the
+      dot products from growing with dimension and saturating the softmax.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Take \(d_k=4\), one query with scores \(QK^\top=(4,0)\) against
+      two keys, and value rows \(\mathbf v_1=(1,0)\), \(\mathbf v_2=(0,1)\). Scaling gives
+      \((4/2,0/2)=(2,0)\); \(\mathrm{softmax}(2,0)=(0.8808,0.1192)\). The output is
+      \(0.8808(1,0)+0.1192(0,1)=(0.8808,0.1192)\) — mostly the first value. A \([\text{PAD}]\)
+      position is excluded by setting its attention logit to \(-\infty\), which gives it weight zero.
+    </p>
+
+    <h3 id="nsp">3 · Next-sentence prediction</h3>
+
+    <p>
+      NSP pools the \([\text{CLS}]\) output \(\mathbf h_{\text{CLS}}\in\mathbb R^D\) through a
+      linear layer and a sigmoid: \(p=\sigma(\mathbf w^\top\mathbf h_{\text{CLS}}+b)\in(0,1)\), with
+      target \(y\in\{0,1\}\). The loss is binary cross-entropy
+      \(\mathcal L_{\text{NSP}}=-[y\log p+(1-y)\log(1-p)]\).
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Let \(\mathbf w^\top\mathbf h_{\text{CLS}}+b=1.5\), so
+      \(p=1/(1+e^{-1.5})=0.8176\). If the true label is “not next” (\(y=0\)), the loss is
+      \(-\log(1-0.8176)=-\log(0.1824)=1.702\) nats. If the label is “next” (\(y=1\)), the loss is
+      \(-\log 0.8176=0.201\) nats. NSP was later criticised because the task is easy to solve with
+      topic cues rather than true coherence; many later models dropped it.
+    </p>
+
+    <h3 id="head">4 · A fine-tuning head</h3>
+
+    <p>
+      For a \(C\)-class task, attach \(W\in\mathbb R^{C\times D}\) to the pooled vector and train
+      cross-entropy: \(\mathcal L=-\log\,\mathrm{softmax}(W\mathbf h_{\text{CLS}}+\mathbf b)_y\).
+      The pretrained encoder is usually fine-tuned with a learning rate around \(10^{-5}\) to a few
+      times \(10^{-5}\), far below the \(10^{-3}\) used for a randomly initialised head.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With 3-class logits \((0.5,2.0,-1.0)\), exponentials are
+      \((1.649,7.389,0.368)\), summing to \(9.406\). Probabilities are \((0.175,0.786,0.039)\).
+      For target class 1 the loss is \(-\log 0.786=0.241\) nats. A larger learning rate can destroy
+      the pretrained representations before the head converges.
+    </p>
+
+    <h2 id="lab">Lab</h2>
+
+    <h3 id="lab-mask">Fixed sentences, stored predictions, schematic attention</h3>
+    <p>
+      Choose one of two fixed sentences and a masked position. The upper panel draws the token
+      sequence; the lower panels show three schematic attention patterns. The top-3 table is a
+      <strong>stored, clearly-labelled illustration</strong>: it is a hand-written example of what
+      plausible predictions might look like, not model output, and it deliberately omits scores.
+    </p>
+
+    <section class="lab" data-widget="m4-03-bert-mask-viewer" data-badge="illustrative"
+             data-title="BERT mask viewer (stored predictions)"
+             data-note="Illustrative: sentences and the top-3 table are stored in the widget; the attention thumbnails are schematic and no model runs in the browser.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      The first listing is the Hugging Face fine-tuning skeleton for a PyTorch model: the tokenizer
+      builds \((N,T)\) token ids and an attention mask, and the head is attached by
+      <code>AutoModelForSequenceClassification</code>. Nothing is downloaded at build time — run
+      this in your own Colab. The second listing computes the MLM softmax by hand so you can check
+      the arithmetic above. Shapes use \((N,T)\), where \(N\) is batch size and \(T\) sequence length.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch / Hugging Face</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">MLM loss by hand</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import TrainingArguments, Trainer
+import torch
+
+CHECKPOINT = "bert-base-uncased"       # choose a checkpoint before running
+tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT)
+
+sentences = ["The cat sat on the mat.", "The dog slept on the sofa."]
+labels = [0, 1]                        # already remapped to 0..C-1
+
+batch = tokenizer(sentences, padding=True, truncation=True,
+                  max_length=128, return_tensors="pt")
+# batch["input_ids"]      shape (N=2, T)
+# batch["attention_mask"] shape (N=2, T); 1 = real token, 0 = padding
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    CHECKPOINT, num_labels=2)          # adds a head on top of [CLS]
+
+args = TrainingArguments(
+    output_dir="./out", learning_rate=2e-5,   # small LR for fine-tuning
+    num_train_epochs=3, per_device_train_batch_size=8,
+)
+trainer = Trainer(model=model, args=args,
+                  train_dataset=None)   # supply a torch Dataset of encoded rows
+# trainer.train()                       # uncomment in Colab
+
+with torch.no_grad():
+    logits = model(**batch).logits      # shape (N, C=2), pre-softmax
+print("logits", tuple(logits.shape))</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import torch
+import torch.nn.functional as F
+
+# One masked position, five-token toy vocabulary (synthetic numbers).
+logits = torch.tensor([2.0, 1.0, 0.0, -1.0, -2.0])   # shape (V=5,)
+target = torch.tensor(1)                              # the hidden token "mat"
+
+p = F.softmax(logits, dim=-1)          # (5,) ~ (0.6366, 0.2341, 0.0861, ...)
+loss = F.cross_entropy(logits.unsqueeze(0), target.unsqueeze(0))
+print("probs", [round(v, 4) for v in p.tolist()])
+print("loss", round(loss.item(), 4))   # -log(0.2341) ~ 1.452
+
+# Scaled dot-product attention on T=4 tokens, key dim d_k=4.
+Q = torch.randn(2, 4, 8, 4)            # (N, heads=2, T=4, d_k=4)
+K = torch.randn(2, 4, 8, 4)
+V = torch.randn(2, 4, 8, 4)
+scores = Q @ K.transpose(-1, -2) / (4 ** 0.5)   # (2, 8, 4, 4)
+attn = torch.softmax(scores, dim=-1) @ V        # (2, 8, 4, 4)
+print("attention output", tuple(attn.shape))</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      The \([\text{CLS}]\) vector is a convenience for classification, not magic: some models pool
+      over all tokens instead. Check the checkpoint's documentation before assuming which vector a
+      head should consume, and always pass the tokenizer's <code>attention_mask</code> so padded
+      positions cannot contribute.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Using [CLS] for every model</p>
+        <p>
+          Not every encoder uses \([\text{CLS}]\), and some checkpoints pool the final hidden states
+          differently. Read the model card: attaching a head to the wrong vector still trains, but
+          it throws away the representation the checkpoint was built to expose.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting the attention mask</p>
+        <p>
+          A padded token is still a real row of ids unless you pass <code>attention_mask</code>.
+          Without it, attention attends to padding and the pooled vector shifts with batch length —
+          especially damaging when you pad on the right in one batch and the left in another.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Wrong tokenizer for the checkpoint</p>
+        <p>
+          A cased checkpoint needs a cased tokenizer, and WordPiece vocabularies are not
+          interchangeable. A mismatch silently changes token ids and <code>##</code> continuations,
+          so the model sees a different sequence from the one it was pretrained on.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Fine-tuning at 1e-3</p>
+        <p>
+          That learning rate is typical for a head trained from scratch, but often far too large for
+          pretrained weights: it can erase useful representations in a few steps. Start in the
+          1e-5 range for the encoder and use a larger rate only for the new head if needed.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “binary accuracy is exactly 50% on a two-class task and never moves.”
+      The model and optimiser look fine. The labels do not:
+    </p>
+
+<pre class="code" data-lang="python"><code>raw = df["label"].tolist()              # values are -1 and +1
+dataset = [tokenizer(s, truncation=True) | {"labels": y}
+           for s, y in zip(df["text"], raw)]
+# BUG: the head has 2 output classes, but labels are -1 and +1</code></pre>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        Cross-entropy with class indices expects labels in \(\{0,\ldots,C-1\}\). With labels
+        \(-1\) and \(+1\), index \(-1\) wraps to the last class and index \(+1\) selects the second:
+        the mapping is inconsistent with how the head was created, so the model cannot learn a
+        useful decision. Remap explicitly: <code>labels = [(y + 1) // 2 for y in raw]</code> for
+        \(-1/+1\), or use a label dictionary in general. Verify with
+        <code>set(labels) == {0, 1}</code> before training.
+      </p>
+      <p class="small muted">
+        Quick detector: print the unique label values and the head's <code>num_labels</code> in the
+        same line. A 50% plateau on a balanced two-class problem is a classic sign that the target
+        encoding, not the model, is broken.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m4-03">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — BERT",
+        "questions": [
+          {
+            "q": "What does masked language modelling train the model to do?",
+            "options": ["Predict the next token from the left only", "Recover hidden tokens from bidirectional context", "Reconstruct a compressed latent vector", "Classify the whole sentence with [CLS]"],
+            "correct": 1,
+            "why": [
+              "That is the causal/GPT objective covered in Lesson 4.",
+              "Correct: [MASK] positions are predicted using both left and right context.",
+              "That describes an autoencoder, not MLM.",
+              "That is a fine-tuning head, not the MLM pretraining task."
+            ]
+          },
+          {
+            "q": "In WordPiece, what does the ## prefix mean?",
+            "options": ["The token is masked", "The token continues a previous word", "The token is a special symbol", "The token is padded"],
+            "correct": 1,
+            "why": [
+              "[MASK] is the mask token; ## is not.",
+              "Correct: play##ing splits the word into two subword tokens.",
+              "Special tokens look like [CLS] or [SEP].",
+              "Padding uses the tokenizer's pad token, not ##."
+            ]
+          },
+          {
+            "q": "With toy logits (2, 1, 0, −1, −2) over five tokens, the softmax probability of the second token is about…",
+            "options": ["0.6366", "0.2341", "0.0861", "0.0116"],
+            "correct": 1,
+            "why": [
+              "That is the first token's probability, exp(2)/11.610.",
+              "Correct: exp(1)/11.610 = 2.718/11.610 ≈ 0.2341.",
+              "That is the third token's probability.",
+              "That is the fifth token's probability."
+            ]
+          },
+          {
+            "q": "The attention mask in a tokenizer batch tells the model…",
+            "options": ["Which tokens are masked for MLM", "Which positions are padding and must not be attended to", "Which sentence comes first", "Which learning rate to use"],
+            "correct": 1,
+            "why": [
+              "MLM masks are inserted into input_ids, not the attention_mask.",
+              "Correct: 1 marks real tokens and 0 marks padding.",
+              "Segment ids identify the sentences.",
+              "Learning rate is a training argument."
+            ]
+          },
+          {
+            "q": "NSP was criticised mainly because…",
+            "options": ["It is not differentiable", "It can be solved by topic cues rather than coherence", "It requires labels from humans", "It uses the [MASK] token"],
+            "correct": 1,
+            "why": [
+              "It is a differentiable binary classification loss.",
+              "Correct: the next-sentence signal is often a shallow topical shortcut.",
+              "The pairs come from raw text, so no manual labels are needed.",
+              "NSP uses [CLS] and [SEP], not [MASK]."
+            ]
+          },
+          {
+            "q": "Why divide QKᵀ by √d_k in attention?",
+            "options": ["To make the matrix smaller", "To keep logits in a range where softmax does not saturate", "To add positional information", "To include the padding tokens"],
+            "correct": 1,
+            "why": [
+              "The shape is unchanged by the scalar.",
+              "Correct: dot products grow with d_k, so scaling stabilises the softmax.",
+              "Position comes from positional embeddings.",
+              "Padding is handled by the attention mask."
+            ]
+          },
+          {
+            "q": "A sensible learning rate for fine-tuning the pretrained encoder is around…",
+            "options": ["1e-1", "1e-3", "1e-5", "1"],
+            "correct": 2,
+            "why": [
+              "That would destroy the weights immediately.",
+              "That is plausible for a head from scratch but usually too high for the encoder.",
+              "Correct: a few times 1e-5 is the standard starting range.",
+              "That is far outside useful fine-tuning ranges."
+            ]
+          },
+          {
+            "q": "Which statement about BERT's token vectors is true?",
+            "options": ["The same word always gets the same vector", "The vector depends on the full input sequence", "Only the [CLS] vector is contextual", "Vectors are produced by a causal decoder"],
+            "correct": 1,
+            "why": [
+              "That is a static embedding like Word2Vec, not BERT.",
+              "Correct: self-attention mixes context into every token's output vector.",
+              "Every output position is contextual, not just [CLS].",
+              "BERT uses a bidirectional encoder, not a causal decoder."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · BERT pretrains a bidirectional transformer encoder with MLM, recovering masked tokens from both directions; with toy logits \((2,1,0,-1,-2)\) the second token's probability is \(2.718/11.610=0.2341\).<br>
+        2 · Attention computes \(\mathrm{softmax}(QK^\top/\sqrt{d_k})V\); segment ids, positional ids and an attention mask define which tokens can contribute.<br>
+        3 · Fine-tuning attaches a small head to a pooled vector and uses a learning rate near \(10^{-5}\), with labels remapped to \(0,\ldots,C-1\).
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m4-03">
+      <h2>Cheat sheet — M4·03</h2>
+      <ul>
+        <li>\(\mathcal L_{\text{MLM}}=-\frac{1}{|M|}\sum_{i\in M}\log\mathrm{softmax}(z_i)_{w_i}\). Worked: (2,1,0,−1,−2) → p(mat)=0.2341, loss 1.452.</li>
+        <li>\(\mathrm{Attention}(Q,K,V)=\mathrm{softmax}(QK^\top/\sqrt{d_k})V\). Worked: scores (4,0), d_k=4 → weights (0.881, 0.119).</li>
+        <li>NSP: \(p=\sigma(w^\top h_{\text{CLS}}+b)\); worked logit 1.5 → p=0.818, loss 1.702 for y=0.</li>
+        <li>Head: \(-\log\mathrm{softmax}(Wh_{\text{CLS}}+b)_y\); logits (0.5,2,−1) → loss 0.241 for class 1.</li>
+        <li>WordPiece \(##\) = subword continuation; attention mask 0 marks padding; special tokens [CLS], [SEP], [MASK].</li>
+        <li>Fine-tune the encoder near 1e-5 and check that labels are 0..C−1 before training.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Devlin, J. — <em>BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding</em> (2018).</li>
+      <li>Vaswani, A. — <em>Attention Is All You Need</em> (2017).</li>
+      <li>Schuster, M. — <em>Japanese and Korean Voice Search</em> (2012).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m4-02-variational-autoencoders.html">← Previous: variational autoencoders</a>
+      <a href="m4-04-gpt-and-decoding.html">Next: GPT and decoding →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M4 Autoencoders</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m4-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

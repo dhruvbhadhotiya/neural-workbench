@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feature maps, filters and pooling · DeepLearn Lab</title>
+<meta name="description" content="What learned filters respond to, how max and average pooling downsample feature maps, and how global average pooling replaces a flatten layer.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m1" data-lesson="m1-03" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="index.html" aria-current="page">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 1 · CNNs</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M1 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m1-03">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M1 CNNs</a> / <span>Filters & pooling</span>
+    </nav>
+
+    <h1>Feature maps, filters and pooling</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 3 of 8 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">A filter is the detector; a feature map is where and how strongly it fired. Pooling shrinks maps and trades precise location for robustness to small shifts.</p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+          <li>Distinguish a filter (the weights) from a feature map (the conv output).</li>
+          <li>Compute max-pool and average-pool outputs by hand and in the lab.</li>
+          <li>Explain the shape change of global average pooling, (N,C,H,W) → (N,C).</li>
+          <li>Explain why pooling gives approximate translation invariance and what it costs.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>In classical CV you designed edge filters by hand and then downsampled to save compute. Here the filters are learned by gradient descent; pooling is the same downsampling step, made part of the model graph.</p>
+    </aside>
+
+    <h2 id="intuition">Intuition: where a detector fired</h2>
+
+    <p>
+      Apply 32 filters to an image and you get 32 <strong>feature maps</strong>, each of shape
+      \(H'\times W'\). Channel \(o\) of the output answers one question: “does filter \(o\) find its
+      pattern here?” A positive, large value means a strong response; zero or negative means little
+      or no match. Early filters look for edges and colour blobs; later filters combine those into
+      textures and parts — but every one is still just a dot product followed by a nonlinearity.
+    </p>
+    <p>
+      Pooling then summarizes small neighbourhoods. Max pooling asks “was the pattern present
+      anywhere in this 2×2 window?” — which is why it keeps a strong response even after a
+      one-pixel shift. Average pooling asks “how much of the window responded?” Global average
+      pooling (GAP) does this over the whole map and leaves one number per channel, making the
+      representation independent of where the object appeared.
+    </p>
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols</p>
+      <p>\(A^k\): feature map of channel \(k\), shape \(H\times W\) · \(C\): channel count ·
+      \(N\): batch size · \(K_{pool}\): pooling window · \(S\): pooling stride ·
+      \(o\): output-channel index.</p>
+    </div>
+    
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="pool">1 · Max and average pooling</h3>
+    <p>
+      Pooling uses the same output-size formula as convolution with dilation 1:
+    </p>
+    \[ H' = \left\lfloor \frac{H + 2P - K_{pool} - 1}{S} \right\rfloor + 1 \]
+    \[ \mathrm{max}_A(i,j) = \max_{0\le u,v<K_{pool}} A_{iS+u,\,jS+v}, \qquad
+       \mathrm{avg}_A(i,j) = \frac{1}{K_{pool}^2}\sum_{u,v} A_{iS+u,\,jS+v} \]
+    <p>
+      Worked example on this 4×4 map, with \(K_{pool}=2, S=2, P=0\):
+    </p>
+    \[ A=\begin{bmatrix}1&5&2&8\\3&4&7&6\\9&2&1&5\\0&3&8&4\end{bmatrix} \]
+    <p>
+      Output size: \(\lfloor(4-2-1)/2\rfloor+1=2\), so 2×2. The four maxima are
+      \(\max\{1,5,3,4\}=5\), \(\max\{2,8,7,6\}=8\), \(\max\{9,2,0,3\}=9\),
+      \(\max\{1,5,8,4\}=8\):
+    </p>
+    \[ \mathrm{max}_A = \begin{bmatrix}5&8\\9&8\end{bmatrix}, \qquad
+       \mathrm{avg}_A = \begin{bmatrix}3.25&5.75\\3.5&4.5\end{bmatrix} \]
+    <p>
+      (For the first average: \((1+5+3+4)/4=13/4=3.25\). Pooling has no learnable parameters and
+      keeps the channel count unchanged.)
+    </p>
+
+    <h3 id="gap">2 · Global average pooling</h3>
+    \[ \mathrm{GAP}: (N,C,H,W) \rightarrow (N,C), \qquad
+       \bar A_{n,o} = \frac{1}{HW}\sum_{i=1}^{H}\sum_{j=1}^{W} A_{n,o,i,j} \]
+    <p>
+      Worked example: \(N=1, C=2, H=W=2\), with channel 1
+      \(\begin{bmatrix}1&3\\5&7\end{bmatrix}\) and channel 2
+      \(\begin{bmatrix}2&4\\6&8\end{bmatrix}\). Means:
+      \((1+3+5+7)/4=4\) and \((2+4+6+8)/4=5\). The output is the vector \((4,5)\),
+      shape \((1,2)\). A linear head then maps 2 numbers to class logits instead of
+      flattening \(C\cdot H\cdot W\) numbers.
+    </p>
+
+    <h3 id="invariance">3 · Why pooling gives (approximate) invariance</h3>
+    <p>
+      If a bright pixel moves from column \(j\) to \(j+1\) inside the same 2×2 window, the max over
+      that window is unchanged. So a max-pooled feature is invariant to shifts up to the window
+      width — but only locally, and only while the feature stays in the same window. Crossing a
+      window boundary changes the output. That is why the invariance is <em>approximate</em>, and
+      why pooling too early can destroy information needed for localisation.
+    </p>
+    
+
+    <h2 id="lab">Hands-on labs</h2>
+    <p class="small muted">Every number below is computed in your browser from the inputs you can change.</p>
+<section class="lab" data-widget="m1-03-feature-map-drawer" data-badge="exact"
+         data-title="Feature-map drawer"
+         data-note="Exact: every map is DL.tensor.conv2d / conv2dMulti on the pixels you draw, with no precomputed images.">
+  <div class="lab__body"></div>
+</section>
+
+<section class="lab" data-widget="m1-03-pooling-comparer" data-badge="exact"
+         data-title="Max, average and global pooling"
+         data-note="Exact: windows are reduced with DL.tensor.pool2d and channel means with DL.tensor.gap; all numbers are shown.">
+  <div class="lab__body"></div>
+</section>
+
+    <h2 id="code">Code</h2>
+<div class="tabs" data-tabs>
+  <div class="tabs__list" role="tablist">
+    <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+  </div>
+  <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+model = nn.Sequential(
+    nn.Conv2d(3, 16, 3, padding=1), nn.ReLU(),   # (N,16,H,W)
+    nn.MaxPool2d(2),                             # (N,16,H/2,W/2)
+    nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(),  # (N,32,H/2,W/2)
+)
+
+activation = {}
+def grab(name):
+    def hook(module, inp, out):
+        activation[name] = out.detach()          # (N, C, H', W')
+    return hook
+model[3].register_forward_hook(grab("conv2"))    # index 3 = second Conv2d
+
+x = torch.randn(2, 3, 32, 32)                    # (N, C, H, W)
+y = model(x)                                     # (2, 32, 16, 16)
+print(activation["conv2"].shape)                 # (2, 32, 16, 16)
+
+gap = nn.AdaptiveAvgPool2d(1)
+z = gap(activation["conv2"])                     # (2, 32, 1, 1)
+z = torch.flatten(z, 1)                          # (2, 32)
+logits = nn.Linear(32, 10)(z)                    # (2, 10)
+print(z.shape, logits.shape)</code></pre>
+  </div>
+</div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Filter vs feature map</p>
+        <p>The filter is the fixed K×K×C_in weight tensor; the feature map is the H′×W′ output it produces at one location and channel. Calling both “kernel” hides what a hook records.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Pooling too early</p>
+        <p>A 2×2 pool at the start throws away half the positions before later layers can use them. Tasks that need localisation (detection, segmentation) often replace pooling with stride or keep higher-resolution skips.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">GAP for localisation</p>
+        <p>GAP averages away position. It is excellent for whole-image classification with weak labels, wrong for predicting where an object is.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Assuming pooling learns</p>
+        <p>Max/average pooling contain no parameters. Only conv (and learned downsampling such as stride-2 conv) changes its behaviour through training.</p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+    <p>
+      A reader replaces <code>torch.flatten(x, 1)</code> after global average pooling with the GAP
+      output itself. The Linear layer then reports a shape mismatch: its input is
+      <code>(2,32,1,1)</code> but it expects <code>(2,32)</code>.
+    </p>
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        <code>AdaptiveAvgPool2d(1)</code> returns shape \((N,C,1,1)\), not \((N,C)\).
+        Flatten the two singleton spatial dimensions before the linear layer:
+        <code>z = torch.flatten(gap(x), 1)</code>. Then <code>nn.Linear(C, n_classes)</code>
+        receives \((N,C)\). The lab shows the same GAP step as a vector of channel means.
+      </p>
+      <p class="small muted">In Keras, <code>GlobalAveragePooling2D()</code> already returns
+      \((N,C)\) — do not flatten again there.</p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+    <section class="quiz" data-quiz="m1-03">
+      <script type="application/json" class="quiz__data">
+{
+  "title": "Check yourself — Filters & pooling",
+  "questions": [
+    {
+      "q": "A learned 3×3 filter is best described as:",
+      "options": [
+        "The 3×3 output map",
+        "A 3×3×C_in weight tensor reused at every position",
+        "A pooling window",
+        "The class probability"
+      ],
+      "correct": 1,
+      "why": [
+        "That is the feature map the filter produces.",
+        "Correct: the filter is the shared weight tensor.",
+        "Pooling has no weights.",
+        "Class probabilities come after the head."
+      ]
+    },
+    {
+      "q": "Max-pool a 4×4 map with a 2×2 window and stride 2. Output size is:",
+      "options": [
+        "4×4",
+        "3×3",
+        "2×2",
+        "1×1"
+      ],
+      "correct": 2,
+      "why": [
+        "No downsampling happened.",
+        "That would need stride 1.",
+        "Correct: floor((4−2)/2)+1 = 2.",
+        "That would need a 4×4 window."
+      ]
+    },
+    {
+      "q": "For the 4×4 example in this lesson, the top-right max-pool output is:",
+      "options": [
+        "5",
+        "8",
+        "9",
+        "6"
+      ],
+      "correct": 1,
+      "why": [
+        "That is the top-left output.",
+        "Correct: max{2,8,7,6} = 8.",
+        "That is the bottom-left output.",
+        "That is one input cell, not the maximum."
+      ]
+    },
+    {
+      "q": "Global average pooling changes shape by:",
+      "options": [
+        "(N,C,H,W) → (N,C)",
+        "(N,C,H,W) → (N,H,W)",
+        "(N,C,H,W) → (N,C,1,H)",
+        "(N,C,H,W) → (C,H,W)"
+      ],
+      "correct": 0,
+      "why": [
+        "Correct: one mean per channel and sample.",
+        "That would average channels instead of space.",
+        "That is not global pooling.",
+        "That drops the batch dimension."
+      ]
+    },
+    {
+      "q": "Why is max pooling approximately translation invariant?",
+      "options": [
+        "It has learnable weights that track objects",
+        "A small shift inside the same window leaves the maximum unchanged",
+        "It increases the channel count",
+        "It normalises the input"
+      ],
+      "correct": 1,
+      "why": [
+        "Pooling has no weights.",
+        "Correct: the maximum over a window is unchanged by small moves within it.",
+        "Channels are unchanged.",
+        "Normalisation is a different operation."
+      ]
+    },
+    {
+      "q": "How many parameters does a 2×2 max-pool layer with C=32 have?",
+      "options": [
+        "0",
+        "4",
+        "32",
+        "128"
+      ],
+      "correct": 0,
+      "why": [
+        "Correct: pooling is a fixed operation.",
+        "That would be a 2×2 convolution.",
+        "That counts channels, not weights.",
+        "No parameters are learned."
+      ]
+    },
+    {
+      "q": "In PyTorch, a forward hook on a conv layer can give you:",
+      "options": [
+        "The gradient of the weights",
+        "The output feature map",
+        "The learning rate",
+        "The dataset labels"
+      ],
+      "correct": 1,
+      "why": [
+        "Weight gradients need a backward hook.",
+        "Correct: forward hooks receive the layer output.",
+        "Optimizer state holds that.",
+        "Hooks do not see labels."
+      ]
+    },
+    {
+      "q": "Which choice best preserves location for object detection?",
+      "options": [
+        "GAP right after the stem",
+        "Early 4×4 max pooling",
+        "Conv with stride 2 and retained multi-scale maps",
+        "Flattening the whole image"
+      ],
+      "correct": 2,
+      "why": [
+        "GAP discards all location.",
+        "Coarse pooling destroys small-object detail.",
+        "Correct: stride gives controlled downsampling while skips keep detail.",
+        "Flattening prevents spatial prediction entirely."
+      ]
+    }
+  ]
+}
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+    <div class="keyidea">
+      <p>
+1 · A filter is the shared weight tensor; a feature map is the H′×W′ response of that filter at one output channel.<br>
+2 · Max/average pooling use the output-size formula with no parameters: the lesson's 4×4 example gives [[5,8],[9,8]] and [[3.25,5.75],[3.5,4.5]].<br>
+3 · GAP maps (N,C,H,W) to (N,C); pooling trades location for approximate invariance, so localisation tasks keep higher-resolution maps.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m1-03">
+      <h2>Cheat sheet — M1·03</h2>
+      <ul>
+          <li>Pool output: \(H'=\lfloor(H+2P-K_{pool}-1)/S\rfloor+1\).</li>
+          <li>Max pool: \(\max_{u,v}A_{iS+u,jS+v}\); average pool divides the window sum by \(K_{pool}^2\).</li>
+          <li>Worked 4×4 pool: rows (1,5,2,8)/(3,4,7,6)/(9,2,1,5)/(0,3,8,4) give max [[5,8],[9,8]].</li>
+          <li>GAP: \((N,C,H,W)\to(N,C)\), one mean per channel.</li>
+          <li>Pooling parameters: 0. Channel count is unchanged.</li>
+          <li>Forward hook stores the conv output; flatten GAP's (N,C,1,1) before Linear.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+        <li>LeCun, Y. — <em>Gradient-based learning applied to document recognition</em> (1998).</li>
+        <li>Lin, M. — <em>Network In Network</em> (2013).</li>
+        <li>Zeiler, M. — <em>Visualizing and Understanding Convolutional Networks</em> (2013).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m1-02-convolution.html">← Previous: Convolution</a>
+      <a href="m1-04-architectures.html">Next: Architectures →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M1 CNNs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m1-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

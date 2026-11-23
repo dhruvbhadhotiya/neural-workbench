@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architectures: from LeNet to ResNet · DeepLearn Lab</title>
+<meta name="description" content="Trace shapes and real parameter counts through LeNet, AlexNet, VGG-16 and ResNet-18; compute receptive fields and explain residual and depthwise-separable blocks.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m1" data-lesson="m1-04" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="index.html" aria-current="page">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 1 · CNNs</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M1 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m1-04">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M1 CNNs</a> / <span>Architectures</span>
+    </nav>
+
+    <h1>Architectures: from LeNet to ResNet</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 4 of 8 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">Architecture is the inductive bias made concrete. Every design family can be checked by two numbers: the shape that comes out and the count of parameters that produced it.</p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+          <li>Trace output shapes through the major CNN families and verify their parameter totals.</li>
+          <li>Explain the residual gradient path y = x + F(x) and the role of 1×1 projections.</li>
+          <li>Compute receptive field by the recursion over kernel sizes and strides.</li>
+          <li>Compute the depthwise-separable cost ratio and read an Inception concatenation.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>Model selection in ML meant choosing between estimators with the same features. Here the architecture decides which features can exist at all — and unlike a benchmark score, its shapes and parameter counts are exactly checkable.</p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a family tree of design choices</h2>
+
+    <p>
+      LeNet showed that conv → pool → conv → pool → FC works for digits. AlexNet scaled this to
+      ImageNet with larger kernels, ReLU and dropout. VGG asked whether big kernels were needed:
+      two 3×3 convs have a 5×5 receptive span but fewer parameters and one more nonlinearity.
+      ResNet asked whether depth itself was the problem: adding an identity path makes the
+      gradient highway explicit. Inception runs several kernel sizes in parallel and concatenates
+      their outputs; MobileNet and EfficientNet spend parameters and FLOPs more carefully.
+    </p>
+    <p>
+      Two checkable quantities run through all of them. <strong>Parameters</strong> come from layer
+      shapes (conv \(C_{out}C_{in}K^2+C_{out}\), FC \(D_{in}D_{out}+D_{out}\), BN \(2C\)).
+      The <strong>receptive field</strong> is how many input pixels can influence one output
+      pixel — always larger than a single kernel once layers are stacked.
+    </p>
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols</p>
+      <p>\(F\): residual branch function · \(x\): block input · \(y\): block output ·
+      \(r_l\): receptive field after layer \(l\) · \(k_l,s_l,d_l\): kernel, stride and dilation of
+      layer \(l\) · \(C,K\): channels and kernel size for the cost ratio.</p>
+    </div>
+    
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="residual">1 · Residual blocks</h3>
+    \[ y = x + F(x), \qquad \frac{\partial y}{\partial x} = I + \frac{\partial F}{\partial x} \]
+    <p>
+      Worked scalar check: if the branch Jacobian is \(0.1\), after 20 plain layers a gradient
+      scales as \(0.1^{20}=1.0\times10^{-20}\) (vanished). With skips, each step is
+      \(1+0.1=1.1\), so \(1.1^{20}\approx6.73\). The identity term keeps a direct route from the
+      loss to early layers. When shapes differ (e.g. 64 → 128 channels, stride 2), the skip uses a
+      1×1 conv to project the input: \(y = W_{proj}x + F(x)\).
+    </p>
+
+    <h3 id="rf">2 · Receptive-field recursion</h3>
+    \[ r_l = r_{l-1} + (k_l-1)\, d_l \prod_{i&lt;l} s_i, \qquad r_0 = 1 \]
+    <p>
+      Worked example, five layers, \(k=3\) everywhere and dilations 1.
+      Strides \((1,2,1,2,1)\): layer 1 gives \(r=1+2\cdot1=3\) (jump 1);
+      layer 2 gives \(3+2\cdot1=5\) (jump becomes 2); layer 3 gives \(5+2\cdot2=9\);
+      layer 4 gives \(9+2\cdot2=13\) (jump 4); layer 5 gives \(13+2\cdot4=\mathbf{21}\).
+      The final output pixel sees a 21×21 input window, not 3×3.
+    </p>
+
+    <h3 id="sepconv">3 · Depthwise-separable cost</h3>
+    \[ \frac{\text{depthwise-separable}}{\text{regular}} =
+       \frac{C K^2 + C C_{out}}{C C_{out} K^2}
+       = \frac{1}{C_{out}} + \frac{1}{K^2} \]
+    <p>
+      Worked with \(C=C_{out}=64, K=3\): regular \(=9\cdot64\cdot64=36{,}864\);
+      separable \(=9\cdot64 + 64\cdot64 = 576+4{,}096 = 4{,}672\);
+      ratio \(4{,}672/36{,}864 \approx 0.1267\), matching \(1/64+1/9\).
+    </p>
+
+    <h3 id="inception">4 · Inception branch concatenation</h3>
+    <p>
+      Four parallel branches on the same (spatially padded) input: a 1×1 conv giving 64 channels;
+      1×1→96 then 3×3→128; 1×1→16 then 5×5→32; and a 3×3 pool then 1×1→32. With matching
+      stride and padding, each branch keeps \(H\times W\), so concatenation along the channel axis
+      gives \(64+128+32+32 = 256\) output channels, shape \((N,256,H,W)\).
+    </p>
+
+    <h3 id="archtable">5 · Real parameter counts</h3>
+    <div class="table-wrap">
+    <table class="shape-table">
+      <caption>Parameter totals and selected layers — counts from tools/params.py</caption>
+      <thead><tr><th>model</th><th>input</th><th>stem / first layer</th><th>head</th><th>total parameters</th></tr></thead>
+      <tbody>
+        <tr><td>LeNet-5</td><td>1×28×28</td><td>conv1 5×5 (1→6): 156</td><td>fc 84→10: 850</td><td>61,706 (61.7K)</td></tr>
+        <tr><td>AlexNet</td><td>3×224×224</td><td>conv1 11×11 (3→64, s=4): 23,296</td><td>fc3 4096→1000: 4,097,000</td><td>61,100,840 (61.10M)</td></tr>
+        <tr><td>VGG-16</td><td>3×224×224</td><td>conv 64 3×3 #1: 1,792</td><td>fc1 25088→4096: 102,764,544</td><td>138,357,544 (138.36M)</td></tr>
+        <tr><td>ResNet-18</td><td>3×224×224</td><td>conv1 7×7 (3→64, s=2, b=False): 9,408</td><td>fc 512→1000: 513,000</td><td>11,689,512 (11.69M)</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted">Counts from <code>tools/params.py</code> (resnet18 vgg16 alexnet lenet): every number in this table is copied from its output, not recalled from memory.</p>
+    <p>
+      Shape trace for ResNet-18, from the same tool: input \((1,3,224,224)\) → conv1
+      \((1,64,112,112)\) → max pool \((1,64,56,56)\) → layer1 \((1,64,56,56)\) →
+      layer2 \((1,128,28,28)\) → layer3 \((1,256,14,14)\) → layer4 \((1,512,7,7)\) →
+      GAP \((1,512,1,1)\) → flatten \((1,512)\) → fc \((1,1000)\).
+      VGG-16's fc1 alone has more parameters than all of ResNet-18 — architecture, not depth,
+      explains the difference.
+    </p>
+    
+
+    <h2 id="lab">Hands-on labs</h2>
+    <p class="small muted">Every number below is computed in your browser from the inputs you can change.</p>
+<section class="lab" data-widget="m1-04-shape-param-calculator" data-badge="exact"
+         data-title="Shape and parameter calculator"
+         data-note="Exact: per-layer shapes use DL.tensor.outSize and every count uses DL.nn.convParams / fcParams / BN = 2C.">
+  <div class="lab__body"></div>
+</section>
+
+<section class="lab" data-widget="m1-04-receptive-field" data-badge="exact"
+         data-title="Receptive-field builder"
+         data-note="Exact: cumulative RF and stride jump are computed with DL.tensor.receptiveField after each added layer.">
+  <div class="lab__body"></div>
+</section>
+
+<section class="lab" data-widget="m1-04-residual-gradient" data-badge="exact"
+         data-title="Plain versus residual gradient path"
+         data-note="Exact: gains at each depth are computed by repeated multiplication, with and without the identity term.">
+  <div class="lab__body"></div>
+</section>
+
+    <h2 id="code">Code</h2>
+<div class="tabs" data-tabs>
+  <div class="tabs__list" role="tablist">
+    <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+  </div>
+  <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+class BasicBlock(nn.Module):
+    def __init__(self, cin, cout, stride=1):
+        super().__init__()
+        self.f = nn.Sequential(
+            nn.Conv2d(cin, cout, 3, stride, 1, bias=False), nn.BatchNorm2d(cout), nn.ReLU(),
+            nn.Conv2d(cout, cout, 3, 1, 1, bias=False), nn.BatchNorm2d(cout),
+        )
+        # identity fails when shapes change: need a 1x1 projection
+        self.skip = (nn.Sequential(nn.Conv2d(cin, cout, 1, stride, bias=False),
+                                   nn.BatchNorm2d(cout))
+                     if stride != 1 or cin != cout else nn.Identity())
+        self.relu = nn.ReLU()
+
+    def forward(self, x):                        # (N, cin, H, W)
+        return self.relu(self.f(x) + self.skip(x))  # (N, cout, H/s, W/s)
+
+block = BasicBlock(64, 128, stride=2)
+x = torch.randn(2, 64, 56, 56)   # (N, C, H, W)
+y = block(x)                     # (2, 128, 28, 28)
+print(y.shape)
+print("params", sum(p.numel() for p in block.parameters()))
+
+# ResNet-18 stub: stem + 4 stages of 2 blocks each + GAP + fc
+stem = nn.Sequential(nn.Conv2d(3, 64, 7, 2, 3, bias=False),
+                     nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(3, 2, 1))
+stages = nn.Sequential(BasicBlock(64, 64), BasicBlock(64, 64),
+                       BasicBlock(64, 128, 2), BasicBlock(128, 128))
+head = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(128, 1000))
+print(tuple(head(stages(stem(torch.randn(1, 3, 224, 224)))).shape))  # (1, 1000)</code></pre>
+  </div>
+</div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Skip with mismatched shapes</p>
+        <p>Adding a (N,64,56,56) tensor to a (N,128,28,28) tensor fails. Use a 1×1 conv with the target stride and channel count in the skip path.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">BN placement around the add</p>
+        <p>ResNet puts BN at the end of each conv branch and adds before the final ReLU. Adding after a BN on the skip changes what the identity path preserves.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Counting a block wrong</p>
+        <p>ResNet convs use bias=False, so a 3×3 64→64 conv has 9·64·64 = 36,864 parameters (not 36,928); BN adds 2·64 = 128.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">RF equals kernel size</p>
+        <p>Receptive field grows with every layer and multiplies stride jumps. Five 3×3 layers with strides (1,2,1,2,1) reach 21×21, not 3×3.</p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+    <p>
+      A reader's residual block raises a <code>RuntimeError</code> on the second stage:
+      the add expects matching shapes, but the tensors have 64 and 128 channels.
+    </p>
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The downsampling block changed both channels and spatial size, but the skip was still
+        <code>nn.Identity()</code>. Give the skip a 1×1 projection:
+        <code>nn.Conv2d(64, 128, 1, stride=2, bias=False)</code> followed by
+        <code>BatchNorm2d(128)</code>. Its cost here is \(1\cdot64\cdot128 = 8{,}192\)
+        parameters — exactly the `layer2.0.downsample` row from <code>tools/params.py</code>.
+      </p>
+      <p class="small muted">Guard in code: <code>assert x.shape == skip(x).shape</code> before the add while debugging.</p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+    <section class="quiz" data-quiz="m1-04">
+      <script type="application/json" class="quiz__data">
+{
+  "title": "Check yourself — Architectures",
+  "questions": [
+    {
+      "q": "VGG-16's main design change was:",
+      "options": [
+        "One 11×11 conv per stage",
+        "Stacking several 3×3 convs instead of large kernels",
+        "Replacing every conv with GAP",
+        "Using residual additions"
+      ],
+      "correct": 1,
+      "why": [
+        "That is AlexNet's stem.",
+        "Correct: two 3×3 layers span 5×5 with fewer parameters.",
+        "GAP replaces the flatten head, not the conv stack.",
+        "That is ResNet."
+      ]
+    },
+    {
+      "q": "For a residual block, ∂y/∂x equals:",
+      "options": [
+        "∂F/∂x",
+        "I + ∂F/∂x",
+        "0",
+        "F(x)"
+      ],
+      "correct": 1,
+      "why": [
+        "That is the plain branch alone.",
+        "Correct: y = x + F(x).",
+        "Only if the skip is missing.",
+        "That is the output, not the derivative."
+      ]
+    },
+    {
+      "q": "Five 3×3 conv layers with strides (1,2,1,2,1) have receptive field:",
+      "options": [
+        "11",
+        "13",
+        "21",
+        "32"
+      ],
+      "correct": 2,
+      "why": [
+        "That is the all-stride-1 result.",
+        "That stops before the last layer.",
+        "Correct: 3, 5, 9, 13, 21.",
+        "That is the input size, not the RF."
+      ]
+    },
+    {
+      "q": "Regular conv with C_in=C_out=64, K=3 has how many parameters (bias=False)?",
+      "options": [
+        "4,672",
+        "9,408",
+        "36,864",
+        "36,928"
+      ],
+      "correct": 2,
+      "why": [
+        "That is the depthwise-separable cost.",
+        "That is ResNet's 7×7 stem conv.",
+        "Correct: 9·64·64 = 36,864.",
+        "That includes a 64-element bias that ResNet omits."
+      ]
+    },
+    {
+      "q": "The depthwise-separable ratio 1/C_out + 1/K² for C_out=64, K=3 is about:",
+      "options": [
+        "0.013",
+        "0.127",
+        "0.5",
+        "1.0"
+      ],
+      "correct": 1,
+      "why": [
+        "That omits the K term.",
+        "Correct: 1/64 + 1/9 ≈ 0.1267.",
+        "Too high for this configuration.",
+        "Separable convs are cheaper, not equal."
+      ]
+    },
+    {
+      "q": "A skip connection from 64 to 128 channels at stride 2 needs:",
+      "options": [
+        "Nothing; addition broadcasts",
+        "A 1×1 conv with 64→128 channels and stride 2",
+        "A max pool",
+        "A larger batch size"
+      ],
+      "correct": 1,
+      "why": [
+        "PyTorch will not broadcast mismatched channel counts here.",
+        "Correct: project channels and spatial size together.",
+        "Pooling does not change channels.",
+        "Batches are irrelevant to shape."
+      ]
+    },
+    {
+      "q": "Total parameter count of ResNet-18 (1000 classes) from tools/params.py is:",
+      "options": [
+        "61,706",
+        "11,689,512",
+        "61,100,840",
+        "138,357,544"
+      ],
+      "correct": 1,
+      "why": [
+        "That is LeNet-5.",
+        "Correct: 11,689,512 (11.69M).",
+        "That is AlexNet.",
+        "That is VGG-16."
+      ]
+    },
+    {
+      "q": "An Inception module with branch outputs 64, 128, 32 and 32 channels concatenates to:",
+      "options": [
+        "32 channels",
+        "128 channels",
+        "256 channels",
+        "64 channels"
+      ],
+      "correct": 2,
+      "why": [
+        "Only one branch is counted.",
+        "That is the largest branch.",
+        "Correct: 64+128+32+32 = 256.",
+        "That is the first branch."
+      ]
+    }
+  ]
+}
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+    <div class="keyidea">
+      <p>
+1 · Architecture families differ in how they spend parameters: LeNet 61,706, AlexNet 61,100,840, VGG-16 138,357,544, ResNet-18 11,689,512 (counts from tools/params.py).<br>
+2 · Residual adds give ∂y/∂x = I + ∂F/∂x; skips with shape changes need a 1×1 projection.<br>
+3 · Receptive field follows r_l = r_{l−1} + (k_l−1)d_l∏_{i<l}s_i (21×21 for the worked five-layer stack), and depthwise-separable cost is 1/C_out + 1/K² of regular.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m1-04">
+      <h2>Cheat sheet — M1·04</h2>
+      <ul>
+          <li>Residual: \(y=x+F(x)\), \(\partial y/\partial x=I+\partial F/\partial x\).</li>
+          <li>Receptive field: \(r_l=r_{l-1}+(k_l-1)d_l\prod_{i&lt;l}s_i\).</li>
+          <li>Worked RF for k=3, strides (1,2,1,2,1): 3 → 5 → 9 → 13 → 21.</li>
+          <li>Depthwise-separable ratio: \(1/C_{out}+1/K^2\); for 64,3 it is 0.1267.</li>
+          <li>Counts from tools/params.py: LeNet 61,706 · AlexNet 61,100,840 · VGG-16 138,357,544 · ResNet-18 11,689,512.</li>
+          <li>BN contributes \(2C\) parameters; ResNet convs use bias=False.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+        <li>LeCun, Y. — <em>Gradient-based learning applied to document recognition</em> (1998).</li>
+        <li>Krizhevsky, A. — <em>ImageNet Classification with Deep Convolutional Neural Networks</em> (2012).</li>
+        <li>Simonyan, K. — <em>Very Deep Convolutional Networks for Large-Scale Image Recognition</em> (2014).</li>
+        <li>He, K. — <em>Deep Residual Learning for Image Recognition</em> (2015).</li>
+        <li>Szegedy, C. — <em>Going Deeper with Convolutions</em> (2014).</li>
+        <li>Howard, A. — <em>MobileNets: Efficient Convolutional Neural Networks for Mobile Vision Applications</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m1-03-filters-and-pooling.html">← Previous: Filters & pooling</a>
+      <a href="m1-05-training-cnn.html">Next: Training a CNN →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M1 CNNs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m1-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

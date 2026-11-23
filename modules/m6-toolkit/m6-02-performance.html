@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMP, gradient accumulation and DDP · DeepLearn Lab</title>
+<meta name="description" content="Compute activation memory and effective batch size, do loss-scaling arithmetic, and see why distributed gradient averaging is a mean.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m6" data-lesson="m6-02" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="index.html" aria-current="page">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 6 · Advanced toolkit</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M6 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m6-02">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M6 Advanced toolkit</a> / <span>Performance</span>
+    </nav>
+
+    <h1>AMP, gradient accumulation and DDP</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 2 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Throughput is a design constraint: decide what fits in memory, emulate batches you cannot fit,
+      and average gradients across workers without changing the optimisation problem.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Estimate activation memory from shapes and dtype, then check it against a budget.</li>
+        <li>Use gradient accumulation to reach an effective batch of \(B\cdot A\cdot W\).</li>
+        <li>Explain loss scaling with a concrete underflow example.</li>
+        <li>Derive the all-reduce mean used by DistributedDataParallel.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        In classical ML, a bigger dataset just meant longer runtime. Here the batch size, dtype and
+        number of GPUs form a triangle: push one side and the others change. "Train longer" is no
+        longer a free answer — memory and arithmetic decide which experiments are even possible.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: three knobs, one budget</h2>
+
+    <p>
+      A forward pass must keep the activation of every layer until the backward pass arrives. That
+      live set grows linearly with batch size \(N\), with each feature map's channel count \(C\),
+      and with spatial area \(H'W'\). Using fp16 instead of fp32 halves those bytes. Gradient
+      accumulation lets you pretend the batch is larger by summing gradients over \(A\) micro-batches
+      before one optimizer step; multiple workers \(W\) add a third factor.
+    </p>
+
+    <p>
+      The trap is that they are not interchangeable. Batch normalization computes statistics over
+      the micro-batch on each rank, so shrinking the micro-batch while raising \(A\) changes what
+      the layer sees. AMP's reduced precision needs loss scaling because small gradients underflow
+      to zero in fp16. DDP must <em>average</em> gradients, not sum them, or the larger \(W\) would
+      silently multiply the learning rate.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Memory depends on what you store (activations, parameters, optimizer state); optimisation
+        depends on what you accumulate before stepping. Confusing the two is why "just add GPUs"
+        often fails.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="activation">1 · Activation memory</h3>
+
+    <p>
+      For a stack of layers whose live outputs have shapes \((C_l,H_l,W_l)\), with batch \(N\) and
+      \(b\) bytes per scalar, the activation memory is
+    </p>
+
+    \[ M_{\text{act}} = N\,b\sum_l C_l H_l W_l \]
+
+    <p>
+      Here \(N\) is the micro-batch size per device, \(b\) is 4 for fp32 and 2 for fp16/bf16,
+      \(C_l,H_l,W_l\) are the channel count and spatial size of live feature map \(l\). Scaling
+      by 2 for activations that a backward pass must retain is a common conservative adjustment;
+      the formula above counts one copy per live map.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> A small CNN holds two feature maps per sample:
+      \((64,32,32)\) and \((128,16,16)\). Their sizes are \(64\cdot32\cdot32=65{,}536\) and
+      \(128\cdot16\cdot16=32{,}768\), summing to \(98{,}304\) scalars. With \(N=8\) and fp16
+      (\(b=2\)): \(M=8\cdot2\cdot98{,}304=1{,}572{,}864\) bytes \(=1.5\) MiB. In fp32 that doubles
+      to \(3{,}145{,}728\) bytes \(=3.0\) MiB.
+    </p>
+
+    <h3 id="effective">2 · Effective batch</h3>
+
+    \[ B_{\text{eff}} = B\cdot A\cdot W \]
+
+    <p>
+      \(B\) is the per-device micro-batch, \(A\) the number of accumulation steps between optimizer
+      updates, and \(W\) the number of workers. Each micro-batch is divided by \(A\) in the loss so
+      that the accumulated gradient matches one large batch.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With \(B=8\), \(A=4\), \(W=2\):
+      \(B_{\text{eff}}=8\cdot4\cdot2=64\) examples per optimizer step. If each micro-batch loss is
+      the mean over its 8 examples, the accumulated gradient is \(\sum_{a=1}^{4}\nabla
+      \mathcal{L}_a/4\), the mean over the 32 examples visible to one worker; DDP then averages
+      across the 2 workers, recovering the gradient of the 64-example batch.
+    </p>
+
+    <h3 id="amp">3 · AMP loss scaling</h3>
+
+    \[ \tilde{\mathcal{L}} = S\,\mathcal{L}, \qquad
+       \nabla\theta = \frac{1}{S}\nabla\!\left(S\mathcal{L}\right) \]
+
+    <p>
+      \(S\) is the loss scale (a power of two in typical implementations), \(\mathcal{L}\) the
+      unscaled loss and \(\nabla\theta\) the gradient actually applied. The forward pass and loss
+      are usually computed in fp32; selected ops run in fp16 under an autocast context. Gradients
+      in fp16 have a smallest normal value near \(6\times10^{-5}\), so anything smaller becomes zero.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Suppose a true gradient is \(g=1\times10^{-8}\) and \(S=256\).
+      The scaled gradient is \(256\times10^{-8}=2.56\times10^{-6}\), still below the fp16 normal
+      threshold but inside the subnormal range; with \(S=65{,}536\), \(gS=6.55\times10^{-4}\), safely
+      representable. After unscaling, \((6.55\times10^{-4})/65{,}536=1.0\times10^{-8}\) — the same
+      number the fp32 path would have produced. Conversely, if \(g=100\) and \(S=65{,}536\),
+      \(gS=6.55\times10^{6}\) exceeds fp16's maximum \(65{,}504\); the scaler detects the inf,
+      skips the step, and halves \(S\).
+    </p>
+
+    <h3 id="ddp">4 · DDP all-reduce mean</h3>
+
+    \[ \bar g = \frac{1}{W}\sum_{w=1}^{W} g_w \]
+
+    <p>
+      \(g_w\) is the gradient computed on worker \(w\) from its own \(B\cdot A\) examples, and
+      \(\bar g\) is the gradient every worker uses for its identical parameter update. DDP
+      overlaps this all-reduce with backward computation by bucketizing gradients.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Four workers produce one parameter's gradient fragments
+      \(g=(0.4,\;0.8,\;-0.2,\;1.0)\). Their sum is \(2.0\), so the mean is \(2.0/4=0.5\). Each
+      worker applies \(\theta\leftarrow\theta-\eta\cdot0.5\); with \(\eta=0.1\), the parameter
+      moves by \(0.05\) on every worker, keeping replicas identical. A sum-reduce of \(2.0\) would
+      make the step four times too large.
+    </p>
+
+    <h2 id="lab">Lab: memory budget calculator</h2>
+
+    <p>
+      Every number below is computed from the shapes and knobs you choose. The histogram shows how
+      the activation bytes split across layers; the table shows the exact arithmetic. The AMP and
+      DDP panels apply the two formulas above to concrete numbers.
+    </p>
+
+    <section class="lab" data-widget="m6-02-memory-budget" data-badge="exact"
+             data-title="Memory budget and effective batch"
+             data-note="Exact: activation bytes, effective batch, loss-scale arithmetic and the all-reduce mean are computed from your inputs in the browser.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      A useful mental check: doubling \(B\) doubles activation memory but halves the number of
+      optimizer steps per epoch in wall-clock terms only if throughput scales. Doubling \(A\) keeps
+      memory roughly flat while doubling the work before a step. Doubling \(W\) doubles aggregate
+      throughput but leaves each replica's memory unchanged.
+    </p>
+
+    <h2 id="code">Code: autocast, scaler, accumulation and DDP</h2>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+# ---- AMP + gradient accumulation on one GPU -------------------------------
+model = nn.Sequential(nn.Conv2d(3, 64, 3, padding=1), nn.ReLU(),
+                      nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(64, 10)).cuda()
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+scaler = torch.amp.GradScaler("cuda", init_scale=65536.0)
+B, ACCUM = 8, 4                      # B_eff = 8 * 4 = 32 on one worker
+
+opt.zero_grad(set_to_none=True)
+for step, (x, y) in enumerate(loader):
+    x, y = x.cuda(non_blocking=True), y.cuda(non_blocking=True)
+    with torch.amp.autocast("cuda", dtype=torch.float16):
+        out = model(x)                # selected ops run in fp16
+        loss = nn.functional.cross_entropy(out, y) / ACCUM
+    scaler.scale(loss).backward()     # gradients are scaled, not the parameters
+    if (step + 1) % ACCUM == 0:
+        scaler.unscale_(opt)          # REQUIRED before clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        scaler.step(opt)              # skips the step if grads are inf/NaN
+        scaler.update()               # grows/shrinks the scale
+        opt.zero_grad(set_to_none=True)
+
+# ---- DDP skeleton (launch with torchrun --nproc_per_node=2 train.py) ------
+import os, torch.distributed as dist
+dist.init_process_group("nccl")
+rank, world = dist.get_rank(), dist.get_world_size()
+torch.cuda.set_device(rank)
+model = DDP(model.cuda(rank), device_ids=[rank])
+# DDP averages gradients over `world` ranks automatically: g_bar = mean(g_w).
+# Keep B the same per rank: B_eff = B * ACCUM * world.
+# For BatchNorm with tiny per-rank B, use SyncBatchNorm.convert_sync_batchnorm(model).
+dist.destroy_process_group()</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      bf16 keeps fp32's exponent range, so many bf16 workflows do not need loss scaling; fp16 has
+      the same mantissa width but a much narrower exponent range and does. Check device support
+      before choosing: scaling is harmless with bf16 but unnecessary overhead.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title"><code>optimizer.step()</code> inside the loop</p>
+        <p>
+          Calling the optimizer on every micro-batch turns \(A=4\) into four small steps instead
+          of one large step. Step only at the accumulation boundary, after dividing the loss by \(A\).
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Clipping before unscaling</p>
+        <p>
+          Gradient norms are multiplied by the loss scale. Clip after
+          <code>scaler.unscale_(opt)</code>, or the threshold effectively becomes \(S\) times
+          smaller than you intended.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Missing GradScaler with fp16</p>
+        <p>
+          Without scaling, small fp16 gradients underflow to zero and the loss becomes NaN or
+          plateaus. The NaN-only-with-AMP symptom points here first.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">BatchNorm with tiny per-GPU batches</p>
+        <p>
+          Each rank sees only its micro-batch, so \(B=1\) makes BN statistics noisy. Use
+          SyncBatchNorm or GroupNorm, or raise \(B\) and lower \(A\) within the memory budget.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      The loss is finite in fp32 but becomes NaN as soon as autocast is enabled. The code uses
+      <code>autocast</code>, scales the loss manually by 65536, and calls
+      <code>loss.backward()</code> followed by <code>optimizer.step()</code>. What is missing?
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        There is no <code>GradScaler</code>. Scaling the loss by hand without unscaling and without
+        overflow detection leaves scaled gradients in the parameters and can produce infinities.
+        Use <code>scaler.scale(loss).backward()</code>, <code>scaler.unscale_(optimizer)</code>
+        before clipping, <code>scaler.step(optimizer)</code> and then <code>scaler.update()</code>.
+        If your device supports bf16 well, <code>autocast(dtype=torch.bfloat16)</code> without a
+        scaler is the simpler alternative.
+      </p>
+      <p class="small muted">
+        Second suspect: a loss computed in fp16 (for example a squared difference before the
+        final cast). Keep reduction ops such as cross-entropy in fp32 even under autocast.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m6-02">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — performance",
+        "questions": [
+          {
+            "q": "Per-device batch 8, accumulation 4, 2 workers: what is the effective batch?",
+            "options": ["12", "32", "64", "16"],
+            "correct": 2,
+            "why": ["That adds the knobs instead of multiplying them.", "That counts accumulation but not the workers.", "Correct: 8 × 4 × 2 = 64.", "That multiplies batch by workers only."]
+          },
+          {
+            "q": "Two live feature maps (64,32,32) and (128,16,16), batch 8, fp16: activation memory is…",
+            "options": ["786,432 bytes", "1,572,864 bytes", "3,145,728 bytes", "196,608 bytes"],
+            "correct": 1,
+            "why": ["That uses one byte per value.", "Correct: 8 × 2 × (65,536 + 32,768) = 1,572,864 bytes = 1.5 MiB.", "That is the fp32 result.", "That counts one sample instead of eight."]
+          },
+          {
+            "q": "Why does fp16 training need loss scaling?",
+            "options": ["To make the model converge faster", "To keep small gradients from underflowing to zero", "To increase the batch size", "To avoid computing a backward pass"],
+            "correct": 1,
+            "why": ["Scaling does not change the optimisation trajectory when unscaled correctly.", "Correct: fp16's smallest normal values are much larger than typical gradients.", "Batch size is independent of the scale.", "Backpropagation still runs in full."]
+          },
+          {
+            "q": "A true gradient is 1e-8 and the loss scale is 65536. What is applied after unscaling?",
+            "options": ["6.55e-4", "1e-8", "65536", "0"],
+            "correct": 1,
+            "why": ["That is the scaled value used inside backward.", "Correct: (1e-8 × 65536) / 65536 = 1e-8.", "That is the scale itself.", "Zero would mean underflow; scaling prevents it."]
+          },
+          {
+            "q": "Four DDP ranks produce gradients 0.4, 0.8, -0.2, 1.0 for one parameter. The applied gradient is…",
+            "options": ["2.0", "0.5", "0.4", "1.0"],
+            "correct": 1,
+            "why": ["That is the sum, which would multiply the learning rate by four.", "Correct: the all-reduce computes the mean, 2.0/4 = 0.5.", "That is only the first rank's value.", "That is only the last rank's value."]
+          },
+          {
+            "q": "Where must clip_grad_norm_ be called in an AMP loop?",
+            "options": ["Before backward", "After scaler.unscale_ and before scaler.step", "After scaler.update", "Never — AMP disables clipping"],
+            "correct": 1,
+            "why": ["Gradients do not exist yet.", "Correct: clipping must see unscaled gradient magnitudes.", "That is too late; the step already happened.", "Clipping works normally with AMP."]
+          },
+          {
+            "q": "Which change keeps activation memory roughly constant while increasing the effective batch?",
+            "options": ["Increase per-device batch B", "Increase accumulation A", "Switch fp16 to fp32", "Add another layer"],
+            "correct": 1,
+            "why": ["That increases live activations linearly.", "Correct: A adds sequential micro-batches, so peak memory is unchanged.", "That doubles bytes per value.", "That adds new live maps."]
+          },
+          {
+            "q": "Why is BatchNorm awkward with a tiny per-rank batch in DDP?",
+            "options": ["It needs a learning rate", "Its batch statistics become noisy on each rank", "It cannot run on GPUs", "It disables all-reduce"],
+            "correct": 1,
+            "why": ["Learning rate is not the issue.", "Correct: BN normalises over the local micro-batch; use SyncBatchNorm or GroupNorm.", "BN runs fine on GPUs.", "All-reduce is independent of the normalisation layer."]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Activation memory is \(N b\sum_l C_lH_lW_l\): for two maps at \(N=8\), fp16 costs 1.5 MiB and fp32 costs 3.0 MiB.<br>
+        2 · Effective batch \(B\cdot A\cdot W=8\cdot4\cdot2=64\); divide the loss by \(A\) and let DDP average over \(W\).<br>
+        3 · Loss scaling multiplies by \(S\) before backward and divides by \(S\) after; unscale before clipping or NaN follows.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m6-02">
+      <h2>Cheat sheet — M6·02</h2>
+      <ul>
+        <li>\(M_{\text{act}}=Nb\sum C_lH_lW_l\); fp32 \(b=4\), fp16/bf16 \(b=2\).</li>
+        <li>\(B_{\text{eff}}=B\cdot A\cdot W\); loss divided by \(A\), step at the boundary.</li>
+        <li>\(\tilde{\mathcal L}=S\mathcal L\); unscale by \(S\) before clipping; skip step on inf.</li>
+        <li>DDP: \(\bar g=\frac1W\sum_w g_w\); NCCL all-reduce, one process per GPU.</li>
+        <li>fp16 needs a scaler; bf16 usually does not. BN + tiny \(B\) → SyncBatchNorm.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Micikevicius, P. — <em>Mixed Precision Training</em> (2018).</li>
+      <li>Goyal, P. — <em>Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour</em> (2017).</li>
+      <li>Li, S. — <em>PyTorch Distributed: Experiences on Accelerating Data Parallel Training</em> (2020).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m6-01-reproducibility.html">← Previous: reproducibility</a>
+      <a href="m6-03-interpretability.html">Next: interpretability →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M6 Advanced toolkit</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m6-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

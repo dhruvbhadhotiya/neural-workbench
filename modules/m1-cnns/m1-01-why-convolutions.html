@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why convolutions: locality, sharing, equivariance · DeepLearn Lab</title>
+<meta name="description" content="Three inductive biases that make image models practical: local receptive fields, shared weights and translation equivariance, with exact parameter counts.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m1" data-lesson="m1-01" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="index.html" aria-current="page">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 1 · CNNs</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M1 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m1-01">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M1 CNNs</a> / <span>Why convolutions</span>
+    </nav>
+
+    <h1>Why convolutions: locality, sharing, equivariance</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 1 of 8 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">A 224×224 RGB image is 150,528 numbers. A fully connected first layer to 64 units needs 9,633,856 parameters; a 3×3 convolutional layer with 64 filters needs 1,792. This lesson explains where that gap comes from and what it costs.</p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+          <li>Name the three inductive biases of a convolutional layer: locality, weight sharing and equivariance.</li>
+          <li>Compute fully connected versus convolutional first-layer parameter counts with the formulas and check them in a lab.</li>
+          <li>Distinguish translation equivariance from translation invariance.</li>
+          <li>Explain why a convolutional prior reduces the amount of data a vision model needs.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>In a tabular model every column is a feature with its own weight. Flatten pixels and the same logic gives one weight per pixel per hidden unit — but a cat's ear is the same detector wherever it sits. Convolution encodes that belief: one small filter, reused at every location.</p>
+    </aside>
+
+    <h2 id="intuition">Intuition: three biases, one layer</h2>
+
+    <p>
+      Let the input be a tensor \(\mathsf{X}\in\mathbb{R}^{C\times H\times W}\): \(C\) channels
+      (3 for RGB), height \(H\), width \(W\). A fully connected (FC) layer mixes every one of the
+      \(C H W\) input numbers into every output unit. A convolutional layer makes three assumptions:
+    </p>
+    <ol>
+      <li><strong>Locality.</strong> One output at \((i,j)\) looks only at a \(K\times K\) patch around \((i,j)\). Early visual features are local: edges, colour changes, corners.</li>
+      <li><strong>Weight sharing.</strong> The same \(K\times K\) weights are used at every location, so a detector learned in one corner works in every corner.</li>
+      <li><strong>Equivariance.</strong> Shift the input by \(\tau\) and the output feature map shifts by the same \(\tau\): \(f(\tau \mathsf{X})=\tau f(\mathsf{X})\).</li>
+    </ol>
+    <p>
+      Locality is <em>not</em> the same as sparsity of the learned weights after training: it is a
+      structural constraint on which weights exist at all. Sharing is <em>not</em> just fewer
+      parameters for its own sake — it forces the model to reuse evidence from every location.
+      Finally, equivariance is about feature maps; pooling or global averaging can later produce
+      (approximate) <strong>invariance</strong>, where the output does not move at all.
+    </p>
+    <div class="keyidea">
+      <p>Convolution is a prior: it says “the useful patterns are small, and the same pattern matters everywhere.” That prior is what lets a vision model learn from fewer examples.</p>
+    </div>
+    
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="fc-count">1 · Fully connected first layer</h3>
+    <p>
+      With \(D\) hidden units, each of the \(C H W\) pixels connects to each unit, plus one bias per unit:
+    </p>
+    \[ n_{\mathrm{FC}} = C H W D + D \]
+    <p>
+      Worked example: \(C=3, H=W=224, D=64\).
+      \(C H W = 3\cdot 224\cdot 224 = 150{,}528\);
+      \(150{,}528\cdot 64 = 9{,}633{,}792\);
+      \(+64\) biases gives \(\mathbf{9{,}633{,}856}\) parameters. The input alone is already
+      150,528 numbers per image — this is the “flatten explosion”.
+    </p>
+
+    <h3 id="conv-count">2 · Convolutional first layer</h3>
+    <p>
+      A conv layer has \(C_{out}\) filters, each of shape \(C_{in}\times K\times K\), plus one bias per output filter \(o\):
+    </p>
+    \[ n_{\mathrm{conv}} = C_{out}\,C_{in}\,K^2 + C_{out} \]
+    <p>
+      Worked example: \(C_{in}=3, C_{out}=64, K=3\).
+      \(64\cdot 3\cdot 3^2 = 64\cdot 3\cdot 9 = 1{,}728\), plus \(64\) biases gives
+      \(\mathbf{1{,}792}\) parameters. The ratio is
+      \(9{,}633{,}856 / 1{,}792 \approx 5{,}376\times\) fewer numbers for this first layer.
+      Sharing is the reason: the 1,728 weights are reused at all \(224\times224\) positions.
+    </p>
+
+    <h3 id="equivariance">3 · Equivariance statement</h3>
+    <p>
+      Write \(\tau\) for a translation that moves the image by \((\Delta i,\Delta j)\). A layer
+      \(f\) is translation equivariant when
+    </p>
+    \[ f(\tau \mathsf{X}) = \tau f(\mathsf{X}) \]
+    <p>
+      Worked check on a 1-D example: kernel \(w=[1,-1]\) on signal \(x=[0,1,2,3]\) gives
+      cross-correlation \([0\cdot1-1\cdot 1,\;1\cdot1-2\cdot1,\;2\cdot1-3\cdot1]=[-1,-1,-1]\).
+      Shift the input right by one: \(x'=[0,0,1,2]\) gives \([0, -1, -1]\). That is the original
+      output shifted right with the new first position padded by zero — the pattern moved, it did
+      not change shape.
+    </p>
+    <p>
+      Global average pooling computes \(\frac{1}{HW}\sum_{i,j} A_{i,j,o}\) for each channel \(o\),
+      which discards location: it is invariant, not equivariant. Max pooling over \(2\times2\)
+      windows is only <em>approximately</em> invariant to shifts of one pixel.
+    </p>
+    
+
+    <h2 id="lab">Hands-on labs</h2>
+    <p class="small muted">Every number below is computed in your browser from the inputs you can change.</p>
+<section class="lab" data-widget="m1-01-param-calculator" data-badge="exact"
+         data-title="Locality and parameter calculator"
+         data-note="Exact: FC and conv counts are recomputed from DL.nn.convParams and DL.nn.fcParams for every slider value.">
+  <div class="lab__body"></div>
+</section>
+
+    <h2 id="code">Code</h2>
+<div class="tabs" data-tabs>
+  <div class="tabs__list" role="tablist">
+    <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+  </div>
+  <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+# Same input, two ways of connecting it. NCHW everywhere:
+x = torch.randn(1, 3, 224, 224)          # (N=1, C=3, H=224, W=224)
+
+fc = nn.Linear(3 * 224 * 224, 64)        # flattens to (1, 150528)
+conv = nn.Conv2d(3, 64, kernel_size=3, padding=1)
+
+def count(model):
+    return sum(p.numel() for p in model.parameters())
+
+print("FC first layer   ", count(fc))    # 9633856
+print("Conv first layer ", count(conv))  # 1792
+print("ratio            ", count(fc) / count(conv))  # ~5376.04
+
+y_fc = fc(x.reshape(1, -1))              # (1, 64)
+y_conv = conv(x)                         # (1, 64, 224, 224) with padding=1
+print(y_fc.shape, y_conv.shape)</code></pre>
+  </div>
+</div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Equivariance ≠ invariance</p>
+        <p>Equivariant features move with the object; invariant outputs stay fixed. A conv layer is equivariant. Max pooling or GAP later buys (approximate) invariance — at the cost of location.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">“Convolutions are just sparse FC layers”</p>
+        <p>Sparsity alone would still give each location its own weights. Weight sharing is the second constraint, and it is what makes the parameter count independent of H and W.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Ignoring the flatten explosion</p>
+        <p>The cheap conv stack often ends in a huge Linear layer. ResNet-18's final fc alone has 513,000 parameters (counts from tools/params.py); always count the head too.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Assuming more data is the only fix</p>
+        <p>If images are scarce, a wrong prior costs more than a small dataset. Convs embed the locality/sharing prior; a fully connected model must learn it from examples.</p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+    <p>
+      A reader writes <code>nn.Linear(150528, 10)</code> for a laptop CIFAR-10 experiment with a
+      batch of 128. The first matrix alone has \(150{,}528\cdot 10=1{,}505{,}280\) numbers, and
+      activation memory for the batch is about \(128\cdot150{,}528\cdot4\approx 77\) MB — before
+      gradients, optimizer state or any hidden layer.
+    </p>
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The input was flattened too early. Keep the spatial structure and use a conv stem, then
+        downsample: CIFAR images are \(32\times32\), so \(3\cdot32\cdot32=3{,}072\) inputs, not
+        150,528 (that number belongs to \(224\times224\)). A conv stack with pooling reduces both
+        the parameter count and the activation size. If an FC head is required, pool first and
+        flatten the small map.
+      </p>
+      <p class="small muted">
+        Also check the input convention: NCHW means channel first. A NHWC-shaped array silently
+        interpreted as NCHW gives nonsense shapes instead of an out-of-memory error.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+    <section class="quiz" data-quiz="m1-01">
+      <script type="application/json" class="quiz__data">
+{
+  "title": "Check yourself — Why convolutions",
+  "questions": [
+    {
+      "q": "Which set is the three inductive biases of a convolutional layer?",
+      "options": [
+        "Locality, weight sharing, equivariance",
+        "Momentum, decay, dropout",
+        "Max pooling, ReLU, softmax",
+        "Bias, variance, gradient"
+      ],
+      "correct": 0,
+      "why": [
+        "Correct: local patches, reused weights, and shifts propagating to the feature map.",
+        "Those are training/regularisation choices, not conv biases.",
+        "Those are components often used around convs, not the biases themselves.",
+        "Those are statistical terms, not architectural biases."
+      ]
+    },
+    {
+      "q": "A conv layer with C_in=3, C_out=64, K=3 (bias included) has how many parameters?",
+      "options": [
+        "1,728",
+        "1,792",
+        "9,633,856",
+        "576"
+      ],
+      "correct": 1,
+      "why": [
+        "That omits the 64 biases.",
+        "Correct: 64·3·9 + 64 = 1,792.",
+        "That is the FC first layer for 3×224×224 → 64.",
+        "That is the weight count for one filter only."
+      ]
+    },
+    {
+      "q": "An FC first layer from 3×224×224 to 64 hidden units has how many parameters (with bias)?",
+      "options": [
+        "150,528",
+        "9,633,792",
+        "9,633,856",
+        "1,792"
+      ],
+      "correct": 2,
+      "why": [
+        "That is the number of input values per image.",
+        "That is the weight count, without 64 biases.",
+        "Correct: 150,528·64 + 64 = 9,633,856.",
+        "That is a 64×3×3 conv layer."
+      ]
+    },
+    {
+      "q": "Translation equivariance means:",
+      "options": [
+        "The output does not change when the input moves",
+        "The output moves by the same shift as the input",
+        "The weights change with position",
+        "The kernel is always 1×1"
+      ],
+      "correct": 1,
+      "why": [
+        "That is invariance, not equivariance.",
+        "Correct: f(τx) = τf(x).",
+        "Weights are shared and fixed after training.",
+        "Kernel size is independent of equivariance."
+      ]
+    },
+    {
+      "q": "Which operation most directly produces translation invariance?",
+      "options": [
+        "A 3×3 convolution",
+        "Global average pooling",
+        "A residual add",
+        "A 1×1 convolution"
+      ],
+      "correct": 1,
+      "why": [
+        "A conv is equivariant, not invariant.",
+        "Correct: GAP averages away position.",
+        "A skip connection preserves spatial structure.",
+        "A 1×1 conv mixes channels at each position."
+      ]
+    },
+    {
+      "q": "Why do convolutional networks usually need less training data than fully connected image models?",
+      "options": [
+        "They have more parameters",
+        "The locality and sharing prior removes wrong hypotheses",
+        "They never use gradients",
+        "They only accept greyscale images"
+      ],
+      "correct": 1,
+      "why": [
+        "They typically have far fewer parameters.",
+        "Correct: the prior encodes useful structure before seeing data.",
+        "Convs are trained by backpropagation like any layer.",
+        "They handle any channel count."
+      ]
+    },
+    {
+      "q": "A 1×1 convolution with C_in=32, C_out=16 and bias has how many parameters?",
+      "options": [
+        "32",
+        "16",
+        "528",
+        "512"
+      ],
+      "correct": 2,
+      "why": [
+        "Only one input channel is counted.",
+        "Only biases are counted.",
+        "Correct: 16·32·1 + 16 = 528.",
+        "That omits the 16 biases."
+      ]
+    },
+    {
+      "q": "Which statement about stride and pooling is correct?",
+      "options": [
+        "They are identical operations",
+        "Stride is learned, pooling is not",
+        "Both reduce spatial size; pooling is a separate fixed operation",
+        "Pooling increases channel count"
+      ],
+      "correct": 2,
+      "why": [
+        "Different mechanisms, though both downsample.",
+        "Stride is a fixed hyperparameter too.",
+        "Correct: stride downsamples inside the conv; pooling is a separate layer.",
+        "Pooling leaves channel count unchanged."
+      ]
+    }
+  ]
+}
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+    <div class="keyidea">
+      <p>
+1 · Locality restricts each output to a K×K patch; sharing reuses the same weights at every location.<br>
+2 · For 3×224×224 → 64 the counts are 9,633,856 (FC) versus 1,792 (3×3 conv) — about 5,376× fewer parameters.<br>
+3 · Convs are translation equivariant, f(τx)=τf(x); pooling and GAP trade location for (approximate) invariance.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m1-01">
+      <h2>Cheat sheet — M1·01</h2>
+      <ul>
+          <li>FC params: \(n_{\mathrm{FC}} = C H W D + D\).</li>
+          <li>Conv params: \(n_{\mathrm{conv}} = C_{out} C_{in} K^2 + C_{out}\).</li>
+          <li>Worked: \(3\cdot224\cdot224\cdot64+64=9{,}633{,}856\); \(64\cdot3\cdot9+64=1{,}792\).</li>
+          <li>Equivariance: \(f(\tau x)=\tau f(x)\); invariance: \(f(\tau x)=f(x)\).</li>
+          <li>NCHW convention: conv weight \((C_{out},C_{in},K_H,K_W)\), activation \((N,C,H,W)\).</li>
+          <li>1×1 conv: \(C_{in}C_{out}+C_{out}\) parameters; mixes channels only.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+        <li>LeCun, Y. — <em>Backpropagation Applied to Handwritten Zip Code Recognition</em> (1989).</li>
+        <li>LeCun, Y. — <em>LeNet-5, Convolutional Neural Networks</em> (1998).</li>
+        <li>Goodfellow, Bengio &amp; Courville — <em>Deep Learning</em>, chapter 9 (2016).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="index.html">← Module overview</a>
+      <a href="m1-02-convolution.html">Next: Convolution →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M1 CNNs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m1-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

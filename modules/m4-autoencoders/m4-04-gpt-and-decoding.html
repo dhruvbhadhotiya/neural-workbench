@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPT and decoding strategies · DeepLearn Lab</title>
+<meta name="description" content="Autoregressive factorisation, perplexity, temperature, top-k, top-p and beam search on a fixed five-token distribution, with seeded sampling.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m4" data-lesson="m4-04" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="index.html" aria-current="page">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 4 · Autoencoders</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M4 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m4-04">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M4 Autoencoders</a> / <span>GPT and decoding</span>
+    </nav>
+
+    <h1>GPT and decoding: from logits to text</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 4 of 5 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      A language model only supplies a distribution over the next token. Everything that feels like
+      “creativity” or “quality” happens in the decoding rule you apply to that distribution.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Explain causal masking and the autoregressive factorisation \(p(x_{1:T})=\prod_t p(x_t\mid x_{&lt;t})\).</li>
+        <li>Define perplexity and compute it from a short token sequence.</li>
+        <li>Apply temperature, top-\(k\) and top-\(p\) to a fixed 5-token distribution, with renormalisation.</li>
+        <li>Compare greedy, beam search and sampling, and know when each fails.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        BERT's encoder reads a whole sequence at once. A GPT-style decoder can only read what came
+        <em>before</em>: a causal mask zeroes every attention weight to future positions. The same
+        softmax layer then produces a probability over the vocabulary, and a decoding rule — not the
+        model alone — decides which token is emitted. Logits are the pre-softmax scores; all
+        truncation and temperature operations act on them or on the resulting distribution.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: one token at a time</h2>
+
+    <p>
+      Let \(T\) be the sequence length and \(x_t\) the token at position \(t\). Training maximises
+      the likelihood of each token given its prefix. At inference, the model computes logits
+      \(\mathbf z_t\in\mathbb R^{|V|}\), a distribution is formed, one token is selected, and the
+      process repeats. The key/value tensors of earlier layers can be cached (the <strong>KV
+      cache</strong>) so that each new step does not recompute the whole prefix.
+    </p>
+
+    <p>
+      Greedy decoding takes the argmax — deterministic, but prone to dull or repetitive text. Beam
+      search keeps \(B\) partial sequences, which can also be bland. Sampling draws from the
+      distribution, which is livelier but can produce nonsense tokens. Temperature, top-\(k\) and
+      top-\(p\) are controls on that distribution.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Temperature reshapes the whole distribution; top-\(k\) keeps a fixed number of tokens; top-\(p\)
+        keeps a variable number whose cumulative mass reaches \(p\). Every truncation must be
+        followed by renormalisation so the probabilities still sum to one.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="factor">1 · Autoregressive factorisation</h3>
+
+    <p>
+      The joint probability of a token sequence factors into conditionals one token at a time:
+    </p>
+
+    \[ p(x_{1:T})=\prod_{t=1}^{T}p(x_t\mid x_{1:t-1})
+       =p(x_1)\,p(x_2\mid x_1)\cdots p(x_T\mid x_{1:T-1}) \]
+
+    <p>
+      The causal mask enforces exactly this dependency: position \(t\) cannot attend to positions
+      \(&gt;t\), so its prediction is a function of the prefix only. Here \(x_{1:t-1}\) denotes
+      tokens \(1\) through \(t-1\), and the empty prefix conditions \(p(x_1)\).
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> For “the cat sat”, let
+      \(p(\text{the})=0.4\), \(p(\text{cat}\mid\text{the})=0.3\), and
+      \(p(\text{sat}\mid\text{the cat})=0.2\). Then
+      \(p(\text{the cat sat})=0.4\times0.3\times0.2=0.024\), i.e. 2.4% under this toy model.
+      This is a chain rule identity, not an approximation.
+    </p>
+
+    <h3 id="ppl">2 · Perplexity</h3>
+
+    <p>
+      Perplexity is the exponential of the mean negative log-likelihood in nats. With \(T\) tokens:
+    </p>
+
+    \[ \mathrm{PPL}(x_{1:T})=\exp\!\left(-\frac{1}{T}\sum_{t=1}^{T}\log p(x_t\mid x_{1:t-1})\right) \]
+
+    <p>
+      It can be read as the effective number of equally likely tokens the model is choosing between
+      per step. Lower is better, and it is only comparable across models sharing a tokenizer.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Using the sequence above, the total negative log-likelihood is
+      \(-\log(0.024)=-(\log0.4+\log0.3+\log0.2)=0.9163+1.2040+1.6094=3.7297\) nats. The mean is
+      \(3.7297/3=1.2432\), and \(\mathrm{PPL}=e^{1.2432}=3.467\). Note that this equals the
+      reciprocal of the geometric mean of the three token probabilities.
+    </p>
+
+    <h3 id="temp">3 · Temperature softmax on 5 logits</h3>
+
+    <p>
+      Temperature \(\tau&gt;0\) divides the logits before softmax, which reshapes the distribution
+      without changing the ranking:
+    </p>
+
+    \[ \mathrm{softmax}(\mathbf z/\tau)_i=\frac{e^{z_i/\tau}}{\sum_{j}e^{z_j/\tau}} \]
+
+    <p>
+      \(\tau=1\) is the original distribution; \(\tau&lt;1\) sharpens it toward the argmax;
+      \(\tau&gt;1\) flattens it. As \(\tau\to0\) this tends to greedy decoding (not a uniform
+      distribution); as \(\tau\to\infty\) it tends to uniform.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Take the fixed toy logits used by the lab,
+      \(\mathbf z=(2,1,0.5,0,-1)\), for tokens (the, cat, sat, on, mat).
+    </p>
+
+    <ul>
+      <li>\(\tau=1\): exponentials \((7.389,2.718,1.649,1.000,0.368)\), sum \(13.124\); probabilities \((0.5630,0.2071,0.1256,0.0762,0.0280)\).</li>
+      <li>\(\tau=0.5\): scaled logits \((4,2,1,0,-2)\), exponentials \((54.598,7.389,2.718,1.000,0.135)\), sum \(65.840\); probabilities \((0.8292,0.1122,0.0413,0.0152,0.0021)\).</li>
+    </ul>
+
+    <p>
+      Halving the temperature raises the top token's probability from \(0.5630\) to \(0.8292\):
+      sharper, less varied text.
+    </p>
+
+    <h3 id="topp">4 · top-\(k\), top-\(p\) and renormalisation</h3>
+
+    <p>
+      Top-\(k\) keeps the \(k\) largest probabilities and zeroes the rest. Top-\(p\) (nucleus)
+      keeps the smallest set of highest-probability tokens whose cumulative mass reaches \(p\),
+      then divides every kept probability by the kept mass \(S\) so they sum to one again:
+    </p>
+
+    \[ q_i=\begin{cases}p_i/S,& i\in K_{\text{kept}}\\ 0,&\text{otherwise}\end{cases},
+       \qquad S=\sum_{i\in K_{\text{kept}}}p_i \]
+
+    <p>
+      Here \(K_{\text{kept}}\) is the kept index set and \(S\le 1\) is its retained probability mass.
+      In code, apply temperature first, then top-\(k\), then top-\(p\).
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Start from the \(\tau=1\) probabilities above, sorted
+      \((0.5630,0.2071,0.1256,0.0762,0.0280)\), and set top-\(p=0.8\). The cumulative masses are
+      \(0.5630\), \(0.7701\), \(0.8958\), …; two tokens are not enough (\(0.7701&lt;0.8\)), so three are
+      kept and \(S=0.8958\). Renormalised: \(0.5630/0.8958=0.6285\),
+      \(0.2071/0.8958=0.2312\), \(0.1256/0.8958=0.1402\). These sum to \(0.9999\) up to rounding —
+      an unnormalised distribution would bias the seeded draws.
+    </p>
+
+    <h3 id="beam">5 · Beam score</h3>
+
+    <p>
+      Beam search keeps the \(B\) best partial sequences. To compare candidates of different
+      lengths, score by the mean log-probability (length-normalised):
+    </p>
+
+    \[ s(y_{1:L})=\frac{1}{L}\sum_{\ell=1}^{L}\log p(y_\ell\mid y_{1:\ell-1}) \]
+
+    <p>
+      \(L\) is the candidate length and \(y_{1:L}\) the candidate token sequence. A higher score
+      (less negative) is better.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Candidate A has token probabilities \((0.4,0.3,0.2)\):
+      log-probabilities \((-0.9163,-1.2040,-1.6094)\), mean \(-1.2432\). Candidate B has
+      \((0.1,0.9,0.5)\): logs \((-2.3026,-0.1054,-0.6931)\), mean \(-1.0337\). Beam search prefers B
+      even though greedy decoding at the first step would have picked A's \(0.4\) over B's \(0.1\).
+    </p>
+
+    <h2 id="lab">Lab</h2>
+
+    <h3 id="lab-sampler">A fixed distribution you can sample exactly</h3>
+    <p>
+      The lab fixes the five logits above. Move temperature, top-\(k\), top-\(p\) and the seed; the
+      bar chart always shows the final renormalised distribution, and the table shows the base and
+      final probabilities side by side. Press <em>Draw 200 samples</em> to take seeded draws from the
+      final distribution and compare the histogram with the bars. Every number is computed in the
+      browser from the fixed distribution — this is exact <em>for the toy distribution</em>, not a
+      claim about a real language model.
+    </p>
+
+    <section class="lab" data-widget="m4-04-gpt-sampler" data-badge="exact"
+             data-title="Temperature, top-k and top-p sampler"
+             data-note="Exact: softmax with temperature, sequential top-k and top-p truncation with renormalisation, and 200 seeded draws from the resulting fixed distribution.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      First a 30-line sampler over the toy distribution: it uses the same order of operations as the
+      lab and prints the renormalised probabilities. Then the equivalent Hugging Face
+      <code>generate()</code> call with the same parameters; the model download and vocabulary are
+      the reader's responsibility in Colab. Shapes are \((N,|V|)\) for batches of logits and \((T)\)
+      for a sampled token sequence.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch toy sampler</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">Hugging Face generate()</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+
+torch.manual_seed(7)
+logits = torch.tensor([2.0, 1.0, 0.5, 0.0, -1.0])   # shape (|V|=5,), fixed
+tokens = ["the", "cat", "sat", "on", "mat"]
+temperature, top_k, top_p = 1.0, 3, 0.8
+
+p = torch.softmax(logits / temperature, dim=-1)     # (5,) sums to 1
+# top-k: keep the k largest, zero the rest, renormalise
+vals, idx = torch.topk(p, top_k)                    # both (3,)
+mask = torch.zeros_like(p, dtype=torch.bool)
+mask[idx] = True
+p = torch.where(mask, p, torch.zeros_like(p))
+p = p / p.sum()
+
+# top-p: keep the shortest prefix reaching cumulative mass top_p, renormalise
+order = torch.argsort(p, descending=True)
+cum = torch.cumsum(p[order], dim=-1)
+n_keep = int(torch.searchsorted(cum, top_p) + 1)    # 3 for the worked example
+keep = torch.zeros_like(p, dtype=torch.bool)
+keep[order[:n_keep]] = True
+p = torch.where(keep, p, torch.zeros_like(p))
+p = p / p.sum()                                     # sums to 1 again
+
+draws = torch.multinomial(p, 200, replacement=True) # (200,) token indices
+hist = torch.bincount(draws, minlength=len(tokens)) # (5,) counts
+print([round(v, 4) for v in p.tolist()])
+print({tokens[i]: int(hist[i]) for i in range(len(tokens))})</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+
+name = "gpt2"                                  # any causal LM checkpoint
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name)
+model.eval()
+
+ids = tok("The cat sat on the", return_tensors="pt").input_ids   # (N=1, T)
+with torch.no_grad():
+    out = model.generate(
+        ids,
+        do_sample=True,            # False -> greedy; True enables the controls below
+        temperature=1.0,           # applied before top-k / top-p
+        top_k=3,
+        top_p=0.8,
+        max_new_tokens=20,
+        num_return_sequences=1,
+        pad_token_id=tok.eos_token_id,
+    )
+print(tok.decode(out[0], skip_special_tokens=True))   # out shape (1, T+20)
+
+# Greedy vs beam, for comparison:
+with torch.no_grad():
+    greedy = model.generate(ids, do_sample=False, max_new_tokens=20)
+    beam = model.generate(ids, num_beams=4, do_sample=False, max_new_tokens=20)
+print("greedy", tuple(greedy.shape), "beam", tuple(beam.shape))</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      Temperature 0 is not a valid replacement for top-\(k=1\): most libraries expect a positive
+      temperature, while <code>top_k=1</code> is the supported way to request greedy behaviour from
+      a sampler. Apply temperature before truncation; truncating first and then scaling wastes the
+      renormalisation you just performed.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Temperature 0 vs top-k 1</p>
+        <p>
+          A zero temperature divides by zero; libraries either error or clamp it to a tiny value.
+          If you want deterministic decoding, use <code>do_sample=False</code> or <code>top_k=1</code>
+          rather than \(\tau=0\).
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">top-p before temperature</p>
+        <p>
+          Truncating at \(\tau=1\) and then heating the survivors gives a different distribution
+          from heating first and then truncating. The correct order is softmax with temperature,
+          then top-\(k\), then top-\(p\), renormalising after each cut.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Sampling without a seed</p>
+        <p>
+          Unseeded draws are not reproducible, so a “regression” in output quality may just be a
+          different random path. Fix a seed for evaluation and report it alongside the decoding
+          parameters.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Comparing perplexity across tokenizers</p>
+        <p>
+          A tokenizer that splits words into more tokens changes the per-token likelihood and
+          therefore the perplexity. Only compare PPL between models that tokenise text the same way;
+          otherwise compare a length-normalised task metric instead.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “generation repeats one token forever, and the output never changes.”
+      The model is fine; the decoding configuration is not:
+    </p>
+
+<pre class="code" data-lang="python"><code>out = model.generate(ids, do_sample=True, top_k=1,
+                     max_new_tokens=50, pad_token_id=tok.eos_token_id)
+# BUG: top_k=1 is greedy decoding; repetition has no route to escape</code></pre>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        <code>top_k=1</code> keeps exactly one token at every step, so sampling is greedy in
+        disguise. Once the model enters a repetitive loop, no alternative token can ever be drawn.
+        Raise <code>top_k</code> (for example 40), or use <code>top_p</code> around 0.9, and add a
+        repetition penalty such as <code>repetition_penalty=1.1</code>. Compare a few seeds: if all
+        outputs are identical while <code>do_sample=True</code>, your truncation has collapsed the
+        distribution to a point mass.
+      </p>
+      <p class="small muted">
+        Quick detector: print the number of non-zero probabilities after truncation. If it is 1,
+        you are decoding greedily regardless of what the sampling flag says.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m4-04">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — GPT and decoding",
+        "questions": [
+          {
+            "q": "Why does a GPT-style model use a causal attention mask?",
+            "options": ["To speed up the softmax", "To prevent a position from attending to future tokens", "To add positional embeddings", "To make the batch dimension smaller"],
+            "correct": 1,
+            "why": [
+              "The mask changes attention weights, not the softmax implementation.",
+              "Correct: masking future keys makes each prediction a function of its prefix only.",
+              "Position comes from separate positional embeddings.",
+              "The batch shape is unchanged."
+            ]
+          },
+          {
+            "q": "For token probabilities (0.4, 0.3, 0.2), what is p(x₁:₃)?",
+            "options": ["0.9", "0.024", "0.3", "0.24"],
+            "correct": 1,
+            "why": [
+              "That is the sum, not the product, of the conditionals.",
+              "Correct: the chain rule gives 0.4 × 0.3 × 0.2 = 0.024.",
+              "That is the middle conditional only.",
+              "That drops a factor of ten."
+            ]
+          },
+          {
+            "q": "The mean negative log-likelihood is 1.2432 nats. Perplexity is about…",
+            "options": ["0.288", "1.2432", "3.467", "12.43"],
+            "correct": 2,
+            "why": [
+              "That is exp(−1.2432), the wrong sign.",
+              "That is the mean NLL itself, before exponentiating.",
+              "Correct: exp(1.2432) ≈ 3.467.",
+              "That multiplies rather than exponentiates."
+            ]
+          },
+          {
+            "q": "Halving temperature from 1 to 0.5 on fixed logits…",
+            "options": ["Makes the distribution more uniform", "Sharpens it toward the argmax", "Changes the token ranking", "Renormalises top-p automatically"],
+            "correct": 1,
+            "why": [
+              "That is what increasing temperature does.",
+              "Correct: dividing logits by a smaller positive τ increases the gap before softmax.",
+              "Monotonic scaling cannot change the ranking.",
+              "Truncation is a separate step."
+            ]
+          },
+          {
+            "q": "Starting from sorted probabilities (0.5630, 0.2071, 0.1256, …), top-p = 0.8 keeps how many tokens?",
+            "options": ["1", "2", "3", "5"],
+            "correct": 2,
+            "why": [
+              "One token carries only 0.5630 of the mass.",
+              "Two tokens carry 0.7701, still below 0.8.",
+              "Correct: three tokens reach 0.8958 ≥ 0.8.",
+              "Top-p keeps the smallest sufficient set, not everything."
+            ]
+          },
+          {
+            "q": "After top-p keeps mass S = 0.8958, what must you do?",
+            "options": ["Divide each kept probability by S", "Multiply each kept probability by S", "Add 1 − S to the largest token", "Leave the distribution as it is"],
+            "correct": 0,
+            "why": [
+              "Correct: dividing by S makes the kept probabilities sum to 1 again.",
+              "Multiplying shrinks the total mass further.",
+              "That would invent probability mass and distort the ranking.",
+              "An unnormalised distribution biases seeded draws."
+            ]
+          },
+          {
+            "q": "Beam search length-normalises the score by…",
+            "options": ["Dividing by the number of beams B", "Dividing the sum of log-probabilities by L", "Multiplying by the vocabulary size", "Taking the argmax of the logits"],
+            "correct": 1,
+            "why": [
+              "B is the number of candidates kept, not a sequence length.",
+              "Correct: (1/L)Σ log p prefers candidates by average log-probability.",
+              "That would not correct for length.",
+              "That is greedy decoding."
+            ]
+          },
+          {
+            "q": "Perplexity comparisons between two models are only fair when…",
+            "options": ["Both use the same tokenizer", "Both have the same parameter count", "Both use greedy decoding", "Both are evaluated on a single sentence"],
+            "correct": 0,
+            "why": [
+              "Correct: PPL is in nats per token, so the tokenisation defines the unit.",
+              "Parameter count is irrelevant to the metric's definition.",
+              "PPL is evaluated on teacher-forced likelihoods, not generation.",
+              "A larger corpus is needed for a stable estimate."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · A causal decoder factorises sequences as \(p(x_{1:T})=\prod_t p(x_t\mid x_{&lt;t})\); for \((0.4,0.3,0.2)\) the product is \(0.024\), giving perplexity \(e^{3.7297/3}=3.467\).<br>
+        2 · Temperature divides logits before softmax (\(\tau=0.5\) raises the top probability from \(0.5630\) to \(0.8292\)); top-\(k\) and top-\(p\) then cut the tail and must renormalise (\(0.5630/0.8958=0.6285\)).<br>
+        3 · Greedy and beam search are deterministic, sampling needs a seed, and beam score is \((1/L)\sum\log p\); never compare perplexity across tokenizers.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m4-04">
+      <h2>Cheat sheet — M4·04</h2>
+      <ul>
+        <li>\(p(x_{1:T})=\prod_{t=1}^{T}p(x_t|x_{&lt;t})\). Worked: 0.4·0.3·0.2 = 0.024.</li>
+        <li>\(\mathrm{PPL}=\exp(-\frac1T\sum_t\log p_t)\). Worked: exp(3.7297/3) = 3.467.</li>
+        <li>\(\mathrm{softmax}(z/\tau)\): logits (2,1,0.5,0,−1) → p = (0.5630, 0.2071, 0.1256, 0.0762, 0.0280) at τ=1.</li>
+        <li>Top-p: keep the shortest prefix reaching p, divide by S. Worked: 0.8 needs 3 tokens, S=0.8958, first p=0.6285.</li>
+        <li>Beam: \(s=(1/L)\sum_\ell\log p_\ell\); compare −1.2432 with −1.0337 for two length-3 candidates.</li>
+        <li>Order of operations: temperature → top-k → top-p → seeded draw; top-k=1 is greedy.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Holtzman, A. — <em>The Curious Case of Neural Text Degeneration</em> (2020).</li>
+      <li>Radford, A. — <em>Language Models are Unsupervised Multitask Learners</em> (2019).</li>
+      <li>Sutskever, I. — <em>Sequence to Sequence Learning with Neural Networks</em> (2014).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m4-03-bert.html">← Previous: BERT</a>
+      <a href="m4-05-huggingface-lora-and-decisions.html">Next: Hugging Face, LoRA and decisions →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M4 Autoencoders</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m4-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

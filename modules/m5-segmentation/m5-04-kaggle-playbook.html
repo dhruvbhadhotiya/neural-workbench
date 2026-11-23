@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaggle playbook · DeepLearn Lab</title>
+<meta name="description" content="A trustworthy competition workflow: group and time splits, leakage checks, out-of-fold stacking, ensembling, TTA, pseudo-labels and a saved submission checklist.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m5" data-lesson="m5-04" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="index.html" aria-current="page">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 5 · Segmentation &amp; Kaggle</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M5 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m5-04">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M5 Segmentation</a> / <span>Kaggle playbook</span>
+    </nav>
+
+    <h1>The competition playbook: trust your validation</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 4 of 4 <span class="dot">·</span>
+      <span class="badge badge--illustrative">Schematic labs</span> + one exact checklist
+    </p>
+    <p class="lede">
+      A leaderboard score is a noisy, single-number estimate. Your job is to build a local estimate
+      you can trust, then spend a fixed time budget improving it without fooling yourself.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Choose group, time or stratified folds that match how the test set was built.</li>
+        <li>Diagnose leakage from duplicates, target encoding and preprocessing outside the fold.</li>
+        <li>Use out-of-fold predictions for stacking, and average ensembles and TTA correctly.</li>
+        <li>Decide when pseudo-labelling helps and when it amplifies errors.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        In tabular ML, <code>cross_val_score(model, X, y, cv=5)</code> was usually enough. With
+        images, rows are rarely independent: several slices come from one patient, frames from one
+        video sit next to each other in time, and the test set may be a later time period. A random
+        fold then trains on near-duplicates of its own validation rows.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a score is only as good as its split</h2>
+
+    <p>
+      Start by reverse-engineering the competition: read the data description, look for repeated
+      ids, filenames with timestamps, and identical or near-identical feature vectors. Build one
+      validation scheme that mirrors the test distribution, then <em>stop looking at the public
+      leaderboard</em> except as a final sanity check. Every design decision should be made against
+      your local folds.
+    </p>
+
+    <p>
+      Three splitting rules cover most cases. <strong>GroupKFold</strong> keeps all rows sharing a
+      group id (patient, video, image tile) in one fold. <strong>TimeSeriesSplit</strong> trains on
+      the past and validates on a later window. <strong>StratifiedKFold</strong> protects class
+      proportions when rows are genuinely independent. Fitting a scaler, target encoder or
+      pseudo-label model before splitting leaks information across folds; all learned
+      preprocessing must live inside the fold pipeline.
+    </p>
+
+    <section class="lab" data-widget="m5-04-leakage-sim" data-badge="illustrative"
+             data-title="Random folds vs group folds on duplicated data"
+             data-note="Illustrative: the dataset and the nearest-neighbour scoring proxy are synthetic and hand-tuned to show the direction and shape of the optimism gap.">
+      <div class="lab__body"></div>
+    </section>
+
+    <div class="keyidea">
+      <p>
+        If a validation row has a near-duplicate in training, the score measures memorisation, not
+        generalisation. Group and time splits cost a little accuracy on paper and buy a lot of
+        truth.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="cv">1 · Group and time CV sketches</h3>
+
+    <p>
+      Let \(g_i\) be the group id of row \(i\), and \(F_k\) the set of groups held out in fold \(k\).
+      A valid fold satisfies
+    </p>
+
+    \[ i\in F_k \;\Longrightarrow\; \forall j:\ g_j=g_i \Rightarrow j\in F_k \]
+
+    <p>
+      <strong>Worked mini-example.</strong> Three patients A, B, C contribute two scans each: six
+      rows. A random validation fold of two rows picks, say, A₁ and B₁. Their twins A₂ and B₂ stay
+      in train, so 2 of 2 validation rows have a near-duplicate in training. GroupKFold on patient
+      id instead holds out {A₁,A₂} in fold 1, {B₁,B₂} in fold 2, {C₁,C₂} in fold 3: zero duplicated
+      patients cross the boundary.
+    </p>
+
+    <p>
+      For a time split, fold \(k\) trains on days \(1,\dots,k+2\) and validates on day \(k+3\).
+      With five days available: fold 1 = train days 1–3 → val day 4; fold 2 = train 1–4 → val day 5.
+      Training set sizes are 3 and 4 days, validation size 1 day each — no future information is
+      ever used to predict the past.
+    </p>
+
+    <h3 id="var">2 · Ensemble variance falls as σ²/m</h3>
+
+    <p>
+      If \(m\) models make errors with variance \(\sigma^2\) and those errors are independent and
+      equally weighted, the variance of their mean is
+    </p>
+
+    \[ \mathrm{Var}\!\left(\frac{1}{m}\sum_{j=1}^{m} e_j\right)=\frac{\sigma^2}{m} \]
+
+    <p>
+      <strong>Worked example.</strong> With per-model error variance \(\sigma^2=0.04\)
+      (\(\sigma=0.2\)) and \(m=5\): \(\sigma^2/m=0.04/5=0.008\), so the ensemble error standard
+      deviation is \(\sqrt{0.008}\approx0.089\) — less than half of 0.2. If errors are correlated
+      with coefficient \(\rho\), the correct expression is
+      \(\rho\sigma^2+(1-\rho)\sigma^2/m\). At \(\rho=0.5\): \(0.5\cdot0.04+0.5\cdot0.008=0.024\),
+      so \(\sigma_{\mathrm{ens}}\approx0.155\). Diverse models matter as much as their count.
+    </p>
+
+    <section class="lab" data-widget="m5-04-ensemble-tta" data-badge="illustrative"
+             data-title="Ensemble, majority vote and TTA on a toy test set"
+             data-note="Illustrative: the five models and four TTA views are synthetic, fixed probability tables; every averaged score and variance is computed from them.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="tta">3 · TTA averaging and its rules</h3>
+
+    <p>
+      Test-time augmentation predicts the same image under \(T\) transforms (identity, horizontal
+      flip, vertical flip, 180° rotation), maps each prediction back to the original orientation,
+      then averages:
+    </p>
+
+    \[ \bar p_i = \frac{1}{T}\sum_{t=1}^{T} p_i^{(t)} \]
+
+    <p>
+      <strong>Worked example.</strong> One image yields probabilities \([0.70,0.76,0.64,0.90]\)
+      for the four views. Their mean is \((0.70+0.76+0.64+0.90)/4=3.00/4=0.75\).
+      The horizontal-flip prediction must be flipped back <em>before</em> averaging, or pixels are
+      compared at different locations. Averaging probabilities (or logits) is allowed; averaging
+      already-thresholded 0/1 labels is not.
+    </p>
+
+    <h3 id="pseudo">4 · Pseudo-labelling risk</h3>
+
+    <p>
+      A model labels unlabelled data with confidence \(q\); you keep predictions above a threshold
+      \(\tau\) and retrain. If \(n=1000\) unlabelled items are available, the model is confident on
+      90% of them and 10% of those confident predictions are wrong, then
+    </p>
+
+    \[ 0.90\cdot1000=900 \text{ kept},\qquad 0.10\cdot900=90 \text{ wrong labels injected} \]
+
+    <p>
+      Those 90 confident mistakes are exactly the samples the model is least likely to correct.
+      Pseudo-labelling is worth trying only after the validation scheme is trustworthy, with a low
+      enough threshold to add data but a high enough one to protect labels — and with a held-out
+      set that never receives pseudo-labels.
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      A competition skeleton: fold construction, a training loop with out-of-fold (OOF) predictions,
+      a stacking step, TTA at inference and a submission file. All data here is synthetic; no
+      downloads and no external state.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import numpy as np, pandas as pd, torch, random
+from sklearn.model_selection import GroupKFold, StratifiedKFold, TimeSeriesSplit
+from sklearn.linear_model import LogisticRegression
+
+SEED = 42
+random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
+
+# ---- synthetic table: 60 images from 12 groups, no downloads ----------------
+n = 60
+X = np.random.randn(n, 8).astype("float32")
+y = (X[:, 0] + 0.3 * np.random.randn(n) &gt; 0).astype("int64")
+groups = np.repeat(np.arange(12), 5)
+df = pd.DataFrame(X); df["y"] = y; df["group"] = groups
+
+# ---- folds: choose ONE scheme that mirrors the test distribution -----------
+folds = GroupKFold(n_splits=5).split(X, y, groups)
+# folds = StratifiedKFold(5, shuffle=True, random_state=SEED).split(X, y)
+# folds = TimeSeriesSplit(4).split(X)          # rows already sorted by time
+
+def model():
+    return torch.nn.Sequential(torch.nn.Linear(8, 16), torch.nn.ReLU(), torch.nn.Linear(16, 2))
+
+def train_one(tr, va):
+    net = model()
+    opt = torch.optim.Adam(net.parameters(), lr=1e-2)
+    xb, yb = torch.tensor(X[tr]), torch.tensor(y[tr])
+    for _ in range(60):
+        opt.zero_grad()
+        loss = torch.nn.functional.cross_entropy(net(xb), yb)
+        loss.backward(); opt.step()
+    with torch.no_grad():
+        return torch.softmax(net(torch.tensor(X[va])), dim=1).numpy()
+
+# ---- out-of-fold predictions are the only honest stacking features ---------
+oof = np.zeros((n, 2))
+for tr, va in folds:                     # regenerate the fold iterator once if reused
+    oof[va] = train_one(tr, va)
+stacker = LogisticRegression().fit(oof, y)
+print("OOF shape", oof.shape)            # (60, 2)
+
+# ---- inference with TTA: invert each transform before averaging ------------
+def predict_tta(net, image):
+    views = [image, np.fliplr(image), np.flipud(image), np.rot90(image, 2)]
+    ps = []
+    for v, inv in zip(views, [lambda a: a, np.fliplr, np.flipud, lambda a: np.rot90(a, 2)]):
+        with torch.no_grad():
+            ps.append(torch.softmax(net(torch.tensor(inv(v))), dim=1).numpy())
+    return np.mean(ps, axis=0)           # (K,) averaged probabilities
+
+# ---- submission: ids and probabilities, no labels used after this point ----
+sub = pd.DataFrame({"id": np.arange(n), "p": oof[:, 1]})
+sub.to_csv("submission.csv", index=False)
+print(sub.head(3))</code></pre>
+      </div>
+    </div>
+
+    <p>
+      The last gate before an upload is a fixed submission checklist: split audit, seed, OOF
+      predictions, TTA inversion and a sanity check of the CSV. Keep it somewhere that survives a
+      page reload, so a late-night run cannot skip a step.
+    </p>
+
+    <section class="lab" data-widget="m5-04-checklist" data-badge="exact"
+             data-title="Saved submission checklist"
+             data-note="Exact: checkboxes are saved with DL.store and the progress meter is counted from the saved state.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p class="small muted">
+      An example 12-hour budget: 1 h data/split audit, 1.5 h baseline, 1.5 h model loop,
+      3 h improvements, 2 h OOF/ensemble/TTA, 1 h final checks, 2 h buffer. These are planning
+      proportions, not performance claims.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Public-LB overfitting</p>
+        <p>
+          Checking every small change against the public leaderboard turns it into a second training
+          set. Keep a private local fold for decisions and use the leaderboard once or twice near
+          the end.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Leakage through target encoding</p>
+        <p>
+          Computing a target mean on the full training set and then cross-validating gives every
+          validation row a feature derived from its own label. Fit encoders inside each fold with
+          out-of-fold values.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Inconsistent preprocessing</p>
+        <p>
+          Training on normalised images but feeding raw pixels at inference silently changes the
+          input distribution. Package transforms with the model and reuse the exact same pipeline.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">No fixed seed, no sanity check</p>
+        <p>
+          Unseeded splits and augmentation make two runs incomparable. Seed every RNG, then verify
+          the submission file's shape, column order, id coverage and finite values before the final
+          upload.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      Local 5-fold CV reports 0.95 accuracy; the public leaderboard reports 0.70. The model code,
+      seed and preprocessing are identical in both. What is the first thing to investigate?
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        Group leakage. If many rows share a patient, video or original image, a random fold puts
+        near-duplicates on both sides; the model recognises them instead of generalising. Count
+        unique ids, hash the resized pixels to find exact duplicates, and rerun with
+        <code>GroupKFold</code> on the right key. If the data is a time series, use
+        <code>TimeSeriesSplit</code> instead — a future split is a different failure with the same
+        symptom.
+      </p>
+      <p class="small muted">
+        Second check: was a target-based feature or a scaler fitted before splitting? Both inflate
+        CV while leaving the true test score untouched.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m5-04">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — Kaggle playbook",
+        "questions": [
+          {
+            "q": "Why is GroupKFold preferred when several images come from the same patient?",
+            "options": [
+              "It balances class counts better than any other split",
+              "It keeps all rows of a patient in one fold, preventing near-duplicate leakage",
+              "It is faster than random KFold",
+              "It automatically improves the leaderboard score"
+            ],
+            "correct": 1,
+            "why": [
+              "StratifiedKFold is the class-balance tool; groups are about independence.",
+              "Correct: no patient appears in both train and validation.",
+              "Speed is not the reason; correctness is.",
+              "It buys honesty in the estimate, not free accuracy."
+            ]
+          },
+          {
+            "q": "Which split matches a competition whose test images come from a later time period?",
+            "options": ["Random KFold", "StratifiedKFold", "TimeSeriesSplit", "LeaveOneOut"],
+            "correct": 2,
+            "why": [
+              "Random folds mix future and past.",
+              "Stratification does not respect time order.",
+              "Correct: expanding-window splits train on the past and validate later.",
+              "Leave-one-out still mixes time and is expensive."
+            ]
+          },
+          {
+            "q": "A target encoding fitted on all rows before cross-validation causes leakage because…",
+            "options": [
+              "It makes the features too sparse",
+              "Each validation label influences a feature of its own row",
+              "It changes the random seed",
+              "It can only be used with images"
+            ],
+            "correct": 1,
+            "why": [
+              "Sparsity is not the issue; label information is.",
+              "Correct: the encoding was computed using the label you are trying to predict.",
+              "Seeds are unrelated to fold-wise fitting.",
+              "Target encoding is a tabular technique; the leak is universal."
+            ]
+          },
+          {
+            "q": "With independent errors of variance 0.04, what is the variance of the mean of 5 models?",
+            "options": ["0.2", "0.04", "0.008", "0.02"],
+            "correct": 2,
+            "why": [
+              "That is the standard deviation of one model.",
+              "That is the single-model variance.",
+              "Correct: σ²/m = 0.04/5 = 0.008.",
+              "That would be the result for correlated errors with ρ=0.5."
+            ]
+          },
+          {
+            "q": "Out-of-fold predictions are used for stacking because…",
+            "options": [
+              "They are faster to compute than training a stacker",
+              "Each prediction was made by a model that never saw that row's label",
+              "They guarantee a higher leaderboard rank",
+              "They replace the need for a validation set"
+            ],
+            "correct": 1,
+            "why": [
+              "OOF requires training one model per fold, so it is slower.",
+              "Correct: only predictions made out-of-fold are honest features for a meta-model.",
+              "Nothing guarantees rank; stacking can also hurt.",
+              "OOF is itself a validation construction; you still report its score."
+            ]
+          },
+          {
+            "q": "When averaging TTA predictions, you must first…",
+            "options": [
+              "Threshold each view to 0 or 1",
+              "Map each view's output back to the original orientation",
+              "Take the maximum instead of the mean",
+              "Discard the identity view"
+            ],
+            "correct": 1,
+            "why": [
+              "Thresholded labels lose probability information.",
+              "Correct: a flipped image's prediction must be un-flipped before averaging.",
+              "Max is a different rule and is usually noisier.",
+              "The identity view is a legitimate member of the average."
+            ]
+          },
+          {
+            "q": "If a model is confident on 90% of 1000 unlabelled items and 10% of those are wrong, pseudo-labelling injects about…",
+            "options": ["10 wrong labels", "90 wrong labels", "100 wrong labels", "900 wrong labels"],
+            "correct": 1,
+            "why": [
+              "That is 10% of all items, not of the kept set.",
+              "Correct: 0.9·1000 = 900 kept; 0.1·900 = 90 wrong.",
+              "That would require an 11% error rate.",
+              "That is the number of kept items, not wrong ones."
+            ]
+          },
+          {
+            "q": "CV 0.95 but leaderboard 0.70. Which sequence of checks is most sensible?",
+            "options": [
+              "Submit more ensembles to raise the public score",
+              "Tune the threshold on the public leaderboard",
+              "Audit duplicate ids/groups and refit preprocessing inside folds",
+              "Replace the model with a larger one"
+            ],
+            "correct": 2,
+            "why": [
+              "More models cannot fix an optimistic validation estimate.",
+              "That is leaderboard overfitting, the opposite of a fix.",
+              "Correct: a large CV–LB gap is the signature of leakage or a split mismatch.",
+              "Capacity is not the first suspect when the gap is this large."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Match folds to the test mechanism: group ids for repeated entities, expanding windows for time, stratified splits only for independent rows.<br>
+        2 · OOF predictions are the only honest inputs to a stacker; ensembling m models cuts independent error variance to σ²/m (0.04/5 = 0.008), less when errors correlate.<br>
+        3 · TTA averages un-transformed-back probabilities (0.70+0.76+0.64+0.90)/4 = 0.75; pseudo-labels and leaderboard peeking can turn a good local score into a bad submission.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m5-04">
+      <h2>Cheat sheet — M5·04</h2>
+      <ul>
+        <li>Split first, then fit any learned preprocessing inside each fold.</li>
+        <li>GroupKFold: all rows with the same \(g_i\) share a fold; TimeSeriesSplit never trains on the future.</li>
+        <li>Stacking features must be out-of-fold predictions.</li>
+        <li>Independent ensemble: \(\mathrm{Var}(\bar e)=\sigma^2/m\); correlated: \(\rho\sigma^2+(1-\rho)\sigma^2/m\).</li>
+        <li>TTA: invert the transform, then average probabilities — never average thresholds.</li>
+        <li>Seed every RNG; check submission id coverage, column order and finite values.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Breiman, L. — <em>Bagging Predictors</em> (1996).</li>
+      <li>Caruana, R. — <em>Ensemble Selection from Libraries of Models</em> (2004).</li>
+      <li>Cawley, G. — <em>On Over-fitting in Model Selection and Subsequent Selection Bias in Model Evaluation</em> (2010).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m5-03-mask-rcnn.html">← Mask R-CNN</a>
+      <a href="index.html">Module overview →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M5 Segmentation &amp; Kaggle</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m5-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

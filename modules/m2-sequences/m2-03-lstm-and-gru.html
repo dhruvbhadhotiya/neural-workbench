@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LSTM and GRU gates · DeepLearn Lab</title>
+<meta name="description" content="All six LSTM equations, all three GRU equations, worked gate values, parameter counts, bidirectional and stacked configurations, and an exact gate dashboard.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m2" data-lesson="m2-03" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="index.html" aria-current="page">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 2 · Sequences &amp; NLP</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M2 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m2-03">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M2 Sequences &amp; NLP</a> / <span>LSTM and GRU</span>
+    </nav>
+
+    <h1>LSTM and GRU: gates that choose what to remember</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 3 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      A plain RNN overwrites its memory at every step. An LSTM adds a second state with an additive
+      update, so a gradient can travel many steps without being repeatedly squashed.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Write and evaluate all six LSTM equations and all three GRU equations.</li>
+        <li>Explain what each gate does and why the cell state preserves gradients.</li>
+        <li>Count parameters for both cells and choose bidirectional or stacked configurations.</li>
+        <li>Verify a library LSTM against a hand-written cell and read its output shapes.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        A vanilla RNN has one memory \(\mathbf{h}_t\) and one update — it must overwrite the past to
+        write the present. Think of an LSTM as adding an internal notebook \(\mathbf{c}_t\) with three
+        switches: <em>erase</em>, <em>write</em> and <em>read</em>. The switches are learned functions of
+        the current input and previous hidden state.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: an additive memory lane</h2>
+
+    <p>
+      The cell state is updated by addition, \(c_t = f_t c_{t-1} + i_t \tilde c_t\), not by a squash.
+      If the forget gate \(f_t\approx1\) and the input gate \(i_t\approx0\), the cell is copied
+      almost unchanged, and \(\partial c_t/\partial c_{t-1}\approx1\). A gradient riding this lane
+      does not shrink by 0.5 at every step — which is the failure diagnosed in lesson 02.
+    </p>
+
+    <p>
+      The hidden state \(\mathbf{h}_t\) is still a filtered, bounded view of the cell, used as the
+      output of the cell and as the signal fed to the next step's gates. This split — long-lived
+      cell, short-lived hidden — is the core design.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Gates are learned multipliers between 0 and 1. The forget gate controls an additive path,
+        so an LSTM can preserve a gradient across hundreds of steps that would vanish in a tanh RNN.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="symbols">0 · Symbols</h3>
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <ul>
+        <li>\(D\): input width; \(H\): hidden width; \(t\): timestep; \(\mathbf{x}_t\in\mathbb{R}^{D}\); \(\mathbf{h}_t\in\mathbb{R}^{H}\); \(\mathbf{c}_t\in\mathbb{R}^{H}\).</li>
+        <li>\(f_t\): forget gate; \(i_t\): input gate; \(o_t\): output gate; \(\tilde{\mathbf{c}}_t\): candidate cell; all in \(\mathbb{R}^{H}\).</li>
+        <li>\(z_t\): GRU update gate; \(r_t\): GRU reset gate; \(\tilde{\mathbf{h}}_t\): GRU candidate.</li>
+        <li>\(\mathbf{W},\mathbf{U}\): input and recurrent weight matrices; \(\mathbf{b}\): bias; \(\sigma(x)=1/(1+e^{-x})\).</li>
+      </ul>
+    </aside>
+
+    <h3 id="lstm">1 · The six LSTM equations</h3>
+
+    \[ \mathbf{f}_t = \sigma(\mathbf{x}_t\mathbf{W}_f + \mathbf{h}_{t-1}\mathbf{U}_f + \mathbf{b}_f)
+       \qquad \text{(forget)} \]
+    \[ \mathbf{i}_t = \sigma(\mathbf{x}_t\mathbf{W}_i + \mathbf{h}_{t-1}\mathbf{U}_i + \mathbf{b}_i)
+       \qquad \text{(input)} \]
+    \[ \tilde{\mathbf{c}}_t = \tanh(\mathbf{x}_t\mathbf{W}_c + \mathbf{h}_{t-1}\mathbf{U}_c + \mathbf{b}_c)
+       \qquad \text{(candidate)} \]
+    \[ \mathbf{c}_t = \mathbf{f}_t\odot\mathbf{c}_{t-1} + \mathbf{i}_t\odot\tilde{\mathbf{c}}_t
+       \qquad \text{(cell update)} \]
+    \[ \mathbf{o}_t = \sigma(\mathbf{x}_t\mathbf{W}_o + \mathbf{h}_{t-1}\mathbf{U}_o + \mathbf{b}_o)
+       \qquad \text{(output)} \]
+    \[ \mathbf{h}_t = \mathbf{o}_t\odot\tanh(\mathbf{c}_t)
+       \qquad \text{(hidden output)} \]
+
+    <p>\(\odot\) is elementwise multiplication. Write the six lines in that order: three gates, the cell, the output gate, the hidden state.</p>
+
+    <p>
+      <strong>Worked scalar step.</strong> Take pre-activations \(a_f=2\), \(a_i=1\), \(a_o=1.5\),
+      \(a_g=0.8\), with \(c_{t-1}=1\). Then
+    </p>
+
+    \[ f_t=\sigma(2)=\tfrac{1}{1+e^{-2}}=0.8808,\quad i_t=\sigma(1)=0.7311,\quad
+       o_t=\sigma(1.5)=0.8176,\quad \tilde c_t=\tanh(0.8)=0.6640 \]
+    \[ c_t = 0.8808\cdot1 + 0.7311\cdot0.6640 = 0.8808+0.4855 = 1.3663 \]
+    \[ h_t = 0.8176\cdot\tanh(1.3663) = 0.8176\cdot0.8779 = 0.7177 \]
+    \[ \frac{\partial c_t}{\partial c_{t-1}} = f_t = 0.8808
+       \quad\text{vs}\quad \frac{\partial h_t}{\partial h_{t-1}}\approx o_t(1-\tanh^2 c_t)\cdot f_t = 0.8176(1-0.7707)(0.8808)=0.1653 \]
+
+    <p>
+      Even in this modest example the cell path retains about 88% of the gradient per step while
+      the hidden path keeps about 17% — over 20 steps that is the difference between memory and
+      amnesia.
+    </p>
+
+    <h3 id="gru">2 · The three GRU equations</h3>
+
+    \[ \mathbf{z}_t = \sigma(\mathbf{x}_t\mathbf{W}_z + \mathbf{h}_{t-1}\mathbf{U}_z + \mathbf{b}_z)
+       \qquad \text{(update gate)} \]
+    \[ \mathbf{r}_t = \sigma(\mathbf{x}_t\mathbf{W}_r + \mathbf{h}_{t-1}\mathbf{U}_r + \mathbf{b}_r)
+       \qquad \text{(reset gate)} \]
+    \[ \tilde{\mathbf{h}}_t = \tanh(\mathbf{x}_t\mathbf{W}_h + (\mathbf{r}_t\odot\mathbf{h}_{t-1})\mathbf{U}_h + \mathbf{b}_h) \]
+    \[ \mathbf{h}_t = (1-\mathbf{z}_t)\odot\mathbf{h}_{t-1} + \mathbf{z}_t\odot\tilde{\mathbf{h}}_t \]
+
+    <p>
+      (Four displayed lines: three gate/candidate computations plus the interpolation; the
+      "three equations" name refers to the update, reset and candidate gates, with the final
+      interpolation written out explicitly.)
+    </p>
+
+    <p>
+      Worked with the same numbers and \(h_{t-1}=0.5\): \(z_t=\sigma(2)=0.8808\),
+      \(r_t=\sigma(1)=0.7311\), \(\tilde h_t=\tanh(0.8+0.7311\cdot0.5)=\tanh(1.1656)=0.8229\),
+      so \(h_t=(1-0.8808)(0.5)+0.8808(0.8229)=0.0596+0.7248=0.7844\).
+    </p>
+
+    <section class="lab" data-widget="m2-03-gate-dashboard" data-badge="exact"
+             data-title="Gate dashboard: LSTM versus GRU"
+             data-note="Exact: σ and tanh of the displayed pre-activations, c_t, h_t and the gradient-path widths are recomputed from the sliders; the same numbers feed both gate sets.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="params">3 · Parameter counts</h3>
+
+    <p>
+      In a PyTorch cell, input and recurrent weights for one gate together form a
+      \((D+H)\times H\) matrix, plus \(H\) biases: \(D H + H^2 + H\) numbers per gate. An LSTM has
+      four gates; a GRU has three:
+    </p>
+
+    \[ |\theta|_{\mathrm{LSTM}} = 4(DH+H^2+H),\qquad
+       |\theta|_{\mathrm{GRU}} = 3(DH+H^2+H) \]
+
+    <p>
+      Worked for \(D=3,H=4\): one gate is \(3\cdot4+4^2+4=12+16+4=32\), so LSTM has \(4\cdot32=128\)
+      parameters and GRU has \(3\cdot32=96\). A vanilla RNN with the same widths has 32.
+    </p>
+
+    <h3 id="stacking">4 · Bidirectional and stacked cells</h3>
+
+    <p>
+      A bidirectional layer runs one cell forwards and one backwards, then concatenates their
+      hidden states: output width \(2H\). It is useful when the whole sentence is available
+      (classification, tagging) and invalid for streaming, where the future is unseen. Stacking
+      \(L\) layers feeds layer \(\ell+1\) the outputs of layer \(\ell\); apply dropout between
+      layers, not on the last one.
+    </p>
+
+    <p>
+      Shape check: \(N=8, T=10, D=3, H=4\), <code>num_layers=2</code>,
+      <code>bidirectional=True</code> gives output \((8,10,8)\) (because \(2H=8\)) and
+      <code>h_n</code> \((2\cdot2,8,4)=(4,8,4)\): the first axis is layers × directions.
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      The manual cell below uses PyTorch's actual parameters, so the printed states match the
+      library to numerical precision. The Keras tab shows the same stacked bidirectional cell.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+torch.manual_seed(0)
+
+N, T, D, H = 8, 10, 3, 4
+x = torch.randn(N, T, D)
+lstm = nn.LSTM(D, H, num_layers=2, batch_first=True,
+               bidirectional=True, dropout=0.1)
+
+out, (h_n, c_n) = lstm(x)
+print(out.shape)    # (8, 10, 8)  -- 2*H because bidirectional
+print(h_n.shape)    # (4, 8, 4)   -- layers * directions, N, H
+print(c_n.shape)    # (4, 8, 4)
+print("params:", sum(p.numel() for p in lstm.parameters()))
+
+# Verify a single unidirectional cell by hand against the library.
+cell = nn.LSTMCell(D, H)
+h = torch.zeros(N, H)
+c = torch.zeros(N, H)
+for t in range(T):
+    h, c = cell(x[:, t], (h, c))
+out_lib, (h_lib, c_lib) = cell(x, (torch.zeros(N, H), torch.zeros(N, H)))
+print("manual == library:", torch.allclose(h, h_lib) and torch.allclose(c, c_lib))
+# Recurrent param count for this cell: 4*(D*H + H*H + H) = 4*(12+16+4) = 128
+
+# GRU has three gates instead of four.
+gru = nn.GRU(D, H, batch_first=True)
+print("GRU params:", sum(p.numel() for p in gru.parameters()))  # 3*(D*H+H*H+H) = 96</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+
+tf.random.set_seed(0)
+
+N, T, D, H = 8, 10, 3, 4
+x = tf.random.normal((N, T, D))
+
+# Keras sequences are (batch, time, features); no image layout is involved.
+layer = tf.keras.layers.LSTM(H, return_sequences=True, dropout=0.1,
+                             recurrent_dropout=0.0)
+out = layer(x)
+print(out.shape)            # (8, 10, 4)
+
+stacked = tf.keras.Sequential([
+    tf.keras.layers.LSTM(H, return_sequences=True),
+    tf.keras.layers.Dropout(0.1),
+    tf.keras.layers.LSTM(H, return_sequences=True, go_backwards=True),
+])
+print(stacked(x).shape)     # (8, 10, 4)
+
+# A bidirectional layer concatenates the two directions: width 2*H = 8.
+bi = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(H, return_sequences=True))
+print(bi(x).shape)          # (8, 10, 8)
+print("LSTM params:", layer.count_params())  # 4*(D*H + H*H + H) = 128</code></pre>
+      </div>
+    </div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Last timestep with right padding</p>
+        <p>
+          With right padding, <code>out[:, -1]</code> is a pad state. Pack the sequence using true
+          lengths, or index with <code>lengths − 1</code>.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting <code>h0</code> and <code>c0</code></p>
+        <p>
+          The cell needs both states. Passing only <code>h0</code> to an LSTM raises an error;
+          reusing an old <code>c0</code> silently mixes unrelated sequences.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Bidirectional on streaming data</p>
+        <p>
+          A backward cell needs future tokens. It is fine for offline classification and wrong
+          for autoregressive generation or live prediction.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Stacking without dropout</p>
+        <p>
+          Multi-layer cells overfit quickly. Put dropout <em>between</em> layers
+          (<code>dropout=0.1</code> for <code>num_layers&gt;1</code>), not on the final output.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “<code>h_n</code> has shape <code>(4, N, H)</code> but my code expects
+      <code>(2, N, H)</code>.” The model in the listing above was configured with two layers.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        Both settings are active: the first axis is <code>num_layers × num_directions</code>.
+        With <code>num_layers=2</code> and <code>bidirectional=True</code> that is \(2\times2=4\).
+        Either reshape with <code>h_n.view(num_layers, 2, N, H)</code>, or take the two directions
+        of the top layer with <code>h_n[-2:]</code> and concatenate them into a \((N,2H)\) vector.
+        Do not simply slice <code>h_n[:2]</code> — that gives the forward direction of both layers,
+        not both directions of the last layer.
+      </p>
+      <p class="small muted">
+        Also check that <code>batch_first=True</code> is set; otherwise the shape interpretation
+        changes again.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m2-03">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — LSTM and GRU",
+        "questions": [
+          {
+            "q": "What does the forget gate f_t do in an LSTM?",
+            "options": [
+              "Decides how much of c_{t−1} is kept in c_t",
+              "Decides how much of h_t is returned as output",
+              "Replaces the tanh nonlinearity",
+              "Clips the gradient norm"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: c_t = f_t·c_{t−1} + i_t·ĉ_t; f_t scales the old cell state.",
+              "That is the output gate o_t.",
+              "The candidate still uses tanh.",
+              "Clipping is a separate training operation."
+            ]
+          },
+          {
+            "q": "How do the cell state c_t and the hidden state h_t differ?",
+            "options": [
+              "They are identical in an LSTM",
+              "c_t is an additive long-lived memory; h_t is a gated bounded view of it",
+              "c_t is the input; h_t is the target",
+              "h_t stores gradients; c_t stores weights"
+            ],
+            "correct": 1,
+            "why": [
+              "They are separate states with different update rules.",
+              "Correct: c_t updates by addition, h_t = o_t·tanh(c_t).",
+              "Neither is a target; both are internal states.",
+              "Neither stores optimizer gradients or weights."
+            ]
+          },
+          {
+            "q": "Which gate in a GRU interpolates between the previous hidden state and the candidate?",
+            "options": ["Reset gate r_t", "Update gate z_t", "Forget gate f_t", "Output gate o_t"],
+            "correct": 1,
+            "why": [
+              "The reset gate controls how the past enters the candidate.",
+              "Correct: h_t = (1−z_t)·h_{t−1} + z_t·ĥ_t.",
+              "GRUs have no separate forget gate.",
+              "GRUs have no separate output gate."
+            ]
+          },
+          {
+            "q": "An LSTM with D = 3, H = 4 has how many parameters?",
+            "options": ["32", "96", "128", "256"],
+            "correct": 2,
+            "why": [
+              "That is one gate, or a vanilla RNN.",
+              "That is a GRU with the same widths.",
+              "Correct: 4·(3·4 + 4² + 4) = 4·32 = 128.",
+              "That doubles the four-gate count unnecessarily."
+            ]
+          },
+          {
+            "q": "When is a bidirectional LSTM appropriate?",
+            "options": [
+              "When generating text one token at a time",
+              "When the whole input sentence is available at prediction time",
+              "Only when H is odd",
+              "Always — it is strictly better"
+            ],
+            "correct": 1,
+            "why": [
+              "A backward cell would need future tokens that do not exist yet.",
+              "Correct: offline classification and tagging can read the whole sentence.",
+              "Width parity has nothing to do with directionality.",
+              "It doubles parameters and is invalid for causal tasks."
+            ]
+          },
+          {
+            "q": "Why use pack_padded_sequence with right-padded batches?",
+            "options": [
+              "It makes padding values larger",
+              "It stops the recurrence at the true length so the final state is valid",
+              "It increases the hidden size",
+              "It disables dropout"
+            ],
+            "correct": 1,
+            "why": [
+              "Packing does not alter pad values; it skips them.",
+              "Correct: otherwise h_T is the state after pads, not after the sentence.",
+              "Hidden size is set by the constructor.",
+              "Dropout is independent."
+            ]
+          },
+          {
+            "q": "Why does the LSTM cell state ease vanishing gradients?",
+            "options": [
+              "It removes all nonlinearities",
+              "It provides an additive path with ∂c_t/∂c_{t−1} = f_t ≈ 1",
+              "It doubles the sequence length",
+              "It replaces backprop with a lookup"
+            ],
+            "correct": 1,
+            "why": [
+              "The candidate still uses tanh and gates use sigmoid.",
+              "Correct: repeated multiplication by roughly 1 preserves the signal.",
+              "Sequence length is unchanged.",
+              "Backprop through time still runs."
+            ]
+          },
+          {
+            "q": "For num_layers=2 and bidirectional=True, what is the first axis of h_n?",
+            "options": ["N", "2", "4 = layers × directions", "T"],
+            "correct": 2,
+            "why": [
+              "N is the second axis.",
+              "That would be directions only, with one layer.",
+              "Correct: PyTorch returns (num_layers·num_directions, N, H).",
+              "Time is the output axis of out, not of h_n."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · LSTM: three gates, an additive cell update c_t = f_t c_{t−1} + i_t ĉ_t, then h_t = o_t tanh(c_t).<br>
+        2 · GRU merges cell and hidden into an interpolation controlled by z_t, with r_t gating the candidate; it uses 3 rather than 4 gate blocks.<br>
+        3 · With D=3,H=4 that is 128 versus 96 parameters; bidirectional doubles output width and h_n's first axis is layers × directions.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m2-03">
+      <h2>Cheat sheet — M2·03</h2>
+      <ul>
+        <li>\(f_t=\sigma(x_tW_f+h_{t-1}U_f+b_f)\); \(i_t,o_t\) analogous; \(\tilde c_t=\tanh(\cdot)\).</li>
+        <li>\(c_t=f_t\odot c_{t-1}+i_t\odot\tilde c_t\); \(h_t=o_t\odot\tanh(c_t)\); \(\partial c_t/\partial c_{t-1}=f_t\).</li>
+        <li>GRU: \(z_t=\sigma(\cdot)\), \(r_t=\sigma(\cdot)\), \(\tilde h_t=\tanh(x_tW_h+(r_t\odot h_{t-1})U_h+b_h)\), \(h_t=(1-z_t)h_{t-1}+z_t\tilde h_t\).</li>
+        <li>Parameters per gate: \(DH+H^2+H\). LSTM = 4×; GRU = 3×. For D=3,H=4: 128 and 96.</li>
+        <li>Bidirectional output width \(2H\); \(h_n\) shape \((L\cdot\text{directions},N,H)\).</li>
+        <li>Worked: a_f=2 → f=0.8808, a_i=1 → i=0.7311, c_{t−1}=1, ĉ=0.6640 → c_t=1.3663, h_t=0.7177.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Hochreiter, S. &amp; Schmidhuber, J. — <em>Long Short-Term Memory</em> (1997).</li>
+      <li>Cho, K. — <em>Learning Phrase Representations using RNN Encoder–Decoder for Statistical Machine Translation</em> (2014).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m2-02-bptt-and-vanishing-gradients.html">← BPTT and vanishing gradients</a>
+      <a href="m2-04-tokenization.html">Next: tokenization →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M2 Sequences &amp; NLP</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m2-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BPTT and vanishing gradients · DeepLearn Lab</title>
+<meta name="description" content="Backpropagation through time as one chain rule reused at every step: why products of Jacobians vanish or explode, how spectral radius predicts it, and how gradient clipping works.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m2" data-lesson="m2-02" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="index.html" aria-current="page">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 2 · Sequences &amp; NLP</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M2 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m2-02">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M2 Sequences &amp; NLP</a> / <span>BPTT &amp; vanishing gradients</span>
+    </nav>
+
+    <h1>Backpropagation through time and vanishing gradients</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 2 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      The unrolled RNN is just a very deep chain. Backprop through that chain multiplies the same
+      Jacobian again and again — and repeated multiplication is where memory breaks.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Derive BPTT as the ordinary chain rule applied along the unrolled graph.</li>
+        <li>Explain vanishing and exploding gradients as a product of Jacobians.</li>
+        <li>Use the spectral radius to predict which regime a recurrent weight is in.</li>
+        <li>Apply global-norm gradient clipping at the right point in the training step.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        Backprop in an MLP multiplies one Jacobian per layer. BPTT multiplies the
+        <em>same</em> recurrent Jacobian \(J=\partial\mathbf{h}_t/\partial\mathbf{h}_{t-1}\) once
+        per timestep. Nothing is new mathematically — only the depth is now the sequence length,
+        and the factor being repeated is shared.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a long product of small numbers</h2>
+
+    <p>
+      If a gradient passes through 20 steps and each step shrinks it by a factor of 0.5, only
+      \(0.5^{20}\approx 9.5\times10^{-7}\) of the signal reaches the start. The early tokens
+      cannot learn. If each step instead multiplies by 1.2, the gradient grows to
+      \(1.2^{20}\approx 38\), and an optimizer step blows the weights up. Both failures come from
+      the same place: a <strong>repeated product</strong>, not from a bad learning rate.
+    </p>
+
+    <p>
+      Clipping does not fix vanishing — you cannot amplify a signal that has become numerically
+      indistinguishable from zero. It fixes exploding gradients by rescaling the whole gradient
+      vector before the optimizer sees it. Architectural changes (the LSTM cell path) fix the
+      vanishing side.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Depth in time is depth in the graph. A recurrent Jacobian with norm below 1 kills long-range
+        gradients; above 1 it detonates them; clipping is the guard rail for the second case.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="symbols">0 · Symbols</h3>
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <ul>
+        <li>\(T\): sequence length; \(\mathbf{h}_t\in\mathbb{R}^{H}\): hidden state at step \(t\); \(\mathcal{L}\): scalar loss.</li>
+        <li>\(J_t=\partial\mathbf{h}_t/\partial\mathbf{h}_{t-1}\in\mathbb{R}^{H\times H}\): recurrent Jacobian at step \(t\).</li>
+        <li>\(s\): scalar weight scale used in the worked example; \(\phi'\): derivative of the activation.</li>
+        <li>\(\rho(J)\): spectral radius (largest absolute eigenvalue) of \(J\); \(g\): flattened gradient vector; \(\tau\): clipping threshold; \(\lVert\cdot\rVert\): Euclidean norm.</li>
+      </ul>
+    </aside>
+
+    <h3 id="bptt">1 · Backpropagation through time</h3>
+
+    \[ \frac{\partial\mathcal{L}}{\partial\mathbf{h}_1}
+       = \frac{\partial\mathcal{L}}{\partial\mathbf{h}_T}
+         \prod_{t=2}^{T}\frac{\partial\mathbf{h}_t}{\partial\mathbf{h}_{t-1}}
+       = \frac{\partial\mathcal{L}}{\partial\mathbf{h}_T}\; J_T J_{T-1}\cdots J_2 \]
+
+    <p>
+      In the scalar shortcut, each Jacobian is \(J = s\,\phi'\). With \(s=0.5\), a tanh unit at
+      zero (\(\tanh'(0)=1\)), and \(T=20\):
+    </p>
+
+    \[ J = 0.5\cdot 1 = 0.5,\qquad
+       \left\lVert\frac{\partial\mathcal{L}}{\partial\mathbf{h}_1}\right\rVert = 0.5^{20}
+       = (0.5^{10})^2 = (0.0009766)^2 = 9.5367\times10^{-7} \]
+
+    <p>
+      With a sigmoid activation, \(\sigma'(0)=0.25\), so \(J=0.5\cdot0.25=0.125\) and the same
+      20 steps give \(0.125^{20}\approx 8.7\times10^{-19}\) — effectively zero. With \(s=1.2\) and
+      tanh, \(J=1.2\) and \(1.2^{20}\approx 38.34\). The lab below recomputes this product for any
+      combination of scale, length and activation.
+    </p>
+
+    <section class="lab" data-widget="m2-02-grad-norm-explorer" data-badge="exact"
+             data-title="Gradient-norm explorer"
+             data-note="Exact: every point is |J|^t, with J = weight scale × φ′ recomputed from the slider values; the log-axis plot uses the same product.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="spectral">2 · Spectral radius, not single entries</h3>
+
+    <p>
+      For a matrix Jacobian, the asymptotic behaviour of \(J^k\) is governed by its eigenvalues.
+      The spectral radius is
+    </p>
+
+    \[ \rho(J)=\max_i |\lambda_i|,\qquad \lambda_i=\text{eigenvalues of }J \]
+
+    <p>
+      Worked scalar check: \(J=[0.5]\) has \(\rho=0.5\), so \(\rho^{20}=0.5^{20}=9.54\times10^{-7}\).
+      For \(J=\begin{bmatrix}0.9&0\\0&0.2\end{bmatrix}\), \(\rho=0.9\) and
+      \(\rho^{20}=0.9^{20}\approx0.122\): the large eigenvalue dominates, which is why reading only
+      the smallest entry of a matrix is misleading. Random recurrent matrices with
+      \(\rho>1\) typically explode; with \(\rho<1\) they forget.
+    </p>
+
+    <h3 id="clip">3 · Gradient clipping by global norm</h3>
+
+    \[ g \leftarrow g\cdot\min\!\left(1,\frac{\tau}{\lVert g\rVert}\right),
+       \qquad \lVert g\rVert=\sqrt{\sum_i g_i^2} \]
+
+    <p>
+      Worked example: \(g=(3,4)\), \(\tau=1\). Then \(\lVert g\rVert=\sqrt{9+16}=5\), the factor is
+      \(\min(1,1/5)=0.2\), and \(g\leftarrow(0.6,0.8)\), whose norm is exactly
+      \(\sqrt{0.36+0.64}=1\). If \(\lVert g\rVert\le\tau\) (say \(g=(0.3,0.4)\), \(\tau=1\)), the
+      factor is 1 and nothing changes. Clipping the <em>whole</em> vector preserves its direction;
+      clipping each component independently does not.
+    </p>
+
+    <h3 id="truncated">4 · Truncated BPTT</h3>
+
+    <p>
+      Instead of backpropagating all \(T\) steps, train on chunks of \(K\) steps and detach the
+      state at each boundary. This bounds the product length (cheap memory, stable gradients) at
+      the cost of ignoring dependencies older than \(K\). For \(K=20\) and \(J=0.5\), the longest
+      learned dependency has gradient \(9.5\times10^{-7}\); choosing \(K\) is a bias–compute
+      trade-off, not a mathematical fix for vanishing.
+    </p>
+
+    <p>
+      The practical diagnostic is a gradient-norm curve: log \(\lVert g\rVert\) every optimizer
+      step. A value that grows by roughly a constant factor per step signals exploding gradients;
+      a value pinned near zero on long sequences signals vanishing.
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      Clipping happens <em>after</em> <code>loss.backward()</code> and <em>before</em>
+      <code>optimizer.step()</code>. <code>clip_grad_norm_</code> computes the norm over all
+      parameters together and returns the original norm.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+torch.manual_seed(0)
+
+rnn = nn.RNN(4, 8, batch_first=True)
+head = nn.Linear(8, 2)
+opt = torch.optim.Adam(list(rnn.parameters()) + list(head.parameters()), lr=0.01)
+loss_fn = nn.CrossEntropyLoss()
+
+def grad_norm(params):
+    sq = sum((p.grad.detach() ** 2).sum() for p in params if p.grad is not None)
+    return sq.sqrt().item()
+
+x = torch.randn(16, 25, 4)        # (N, T, D)
+y = torch.randint(0, 2, (16,))    # (N,)
+params = list(rnn.parameters()) + list(head.parameters())
+
+for step in range(200):
+    opt.zero_grad()                       # clear old gradients FIRST
+    out, _ = rnn(x)                       # (N, T, H)
+    logits = head(out[:, -1])             # many-to-one: final state
+    loss = loss_fn(logits, y)
+    loss.backward()
+    before = grad_norm(params)
+    torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)   # global norm
+    after = grad_norm(params)
+    opt.step()                            # step AFTER clipping
+    if step % 40 == 0:
+        print(step, "loss", round(loss.item(), 4),
+              "grad norm", round(before, 3), "-&gt;", round(after, 3))
+
+# Manual equivalent of clip_grad_norm_ for g = (3, 4), tau = 1:
+g = torch.tensor([3., 4.])
+tau = 1.0
+factor = min(1.0, tau / (g.norm() + 1e-12))
+print((g * factor).tolist(), (g * factor).norm().item())   # [0.6, 0.8], 1.0</code></pre>
+      </div>
+    </div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Clipping after <code>step()</code></p>
+        <p>
+          Once the optimizer has moved the weights, rescaling <code>.grad</code> changes nothing.
+          Clip between <code>backward()</code> and <code>step()</code>.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Clipping per parameter</p>
+        <p>
+          Applying a separate norm to every weight tensor changes the update direction and still
+          allows a large global norm. <code>clip_grad_norm_</code> uses all parameters at once.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Blaming the learning rate</p>
+        <p>
+          A loss that turns NaN after hundreds of steps with a growing gradient norm is an
+          exploding-gradient problem. Lowering \(\eta\) without clipping only delays it.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Clipping the wrong quantity</p>
+        <p>
+          Clipping each element to \([-1,1]\) is value clipping, not norm clipping. It is a
+          different operation and does not guarantee \(\lVert g\rVert\le\tau\).
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “the loss is fine for ~300 steps, then becomes NaN. I use \(\eta=0.1\) on
+      an 8-step RNN and no clipping.” The relevant loop is the listing above with two lines removed.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The recurrent Jacobian occasionally has norm above 1; over 8 steps the product grows and
+        \(\eta=0.1\) takes an oversized step, producing NaN. Restore
+        <code>torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)</code> immediately after
+        <code>loss.backward()</code>, and use a modest learning rate such as 0.01. Log
+        <code>grad_norm</code> every step: if it rises geometrically, clipping is masking — not
+        curing — an initialization or scaling problem.
+      </p>
+      <p class="small muted">
+        Also check that <code>zero_grad()</code> is called each iteration; accumulated gradients
+        look exactly like exploding gradients.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m2-02">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — BPTT and vanishing gradients",
+        "questions": [
+          {
+            "q": "In BPTT, what is multiplied repeatedly when sending a gradient from step T back to step 1?",
+            "options": [
+              "The learning rate η",
+              "The recurrent Jacobian ∂h_t/∂h_{t−1}",
+              "The bias vector b_h",
+              "The input vectors x_t"
+            ],
+            "correct": 1,
+            "why": [
+              "η scales the final update, not the chain of derivatives.",
+              "Correct: each step contributes one Jacobian, so the gradient contains their product.",
+              "Biases are parameters, not derivative factors along the state path.",
+              "Inputs affect the Jacobian value but are not themselves multiplied into the chain."
+            ]
+          },
+          {
+            "q": "With weight scale 0.5 and tanh'(0) = 1, roughly how large is the gradient after 20 backprop steps?",
+            "options": ["0.5", "0.026", "9.5×10⁻⁷", "38.3"],
+            "correct": 2,
+            "why": [
+              "That is the factor for a single step.",
+              "That is 0.5⁵, not 0.5²⁰.",
+              "Correct: 0.5²⁰ = 9.54×10⁻⁷, the classic vanishing regime.",
+              "That is 1.2²⁰, the exploding regime."
+            ]
+          },
+          {
+            "q": "Which condition most directly predicts exploding gradients in a linear recurrent map?",
+            "options": ["ρ(J) < 1", "ρ(J) = 0", "ρ(J) > 1", "ρ(J) is an integer"],
+            "correct": 2,
+            "why": [
+              "A spectral radius below 1 attenuates gradients.",
+              "Zero would annihilate them in one step.",
+              "Correct: |λ_max| > 1 makes J^k grow geometrically.",
+              "Integrality is irrelevant; only magnitude matters."
+            ]
+          },
+          {
+            "q": "For g = (3, 4) and τ = 1, what is the norm-clipped gradient?",
+            "options": ["(1, 1)", "(0.6, 0.8)", "(0.3, 0.4)", "(3, 4)"],
+            "correct": 1,
+            "why": [
+              "That is component clipping, which gives norm √2, not 1.",
+              "Correct: ‖g‖ = 5, factor = 1/5, so g → (0.6, 0.8) with norm 1.",
+              "That would be the factor 0.1, not 1/5.",
+              "That leaves the norm at 5, above the threshold."
+            ]
+          },
+          {
+            "q": "Where should gradient clipping be applied in a PyTorch training step?",
+            "options": [
+              "Before loss.backward()",
+              "After backward() and before step()",
+              "After step()",
+              "Inside the forward pass"
+            ],
+            "correct": 1,
+            "why": [
+              "There are no gradients yet to clip.",
+              "Correct: gradients exist after backward, and the optimizer must see the clipped values.",
+              "Too late — the weights have already been updated.",
+              "Forward pass has no gradients to rescale."
+            ]
+          },
+          {
+            "q": "What does truncated BPTT trade away?",
+            "options": [
+              "All gradients",
+              "Dependencies older than the truncation window",
+              "The ability to use minibatches",
+              "The hidden state itself"
+            ],
+            "correct": 1,
+            "why": [
+              "Gradients within the window still flow.",
+              "Correct: detaching at a boundary stops the chain at K steps.",
+              "Truncated BPTT works fine with minibatches.",
+              "The state is still computed; only its gradient path is cut."
+            ]
+          },
+          {
+            "q": "Why does an LSTM cell with forget gate near 1 ease vanishing gradients?",
+            "options": [
+              "It removes the need for backpropagation",
+              "It gives the cell state an additive path with ∂c_t/∂c_{t−1} ≈ 1",
+              "It makes the learning rate larger",
+              "It clips gradients automatically"
+            ],
+            "correct": 1,
+            "why": [
+              "Backprop still runs through the unrolled graph.",
+              "Correct: c_t = f_t c_{t−1} + … has a near-unit derivative path.",
+              "The learning rate is external to the cell.",
+              "Clipping is a separate training step, not an LSTM feature."
+            ]
+          },
+          {
+            "q": "Which observation is the best evidence of exploding gradients during training?",
+            "options": [
+              "The gradient norm grows roughly geometrically step after step",
+              "The gradient norm stays exactly zero",
+              "Validation accuracy slowly improves",
+              "The loss is a constant 0.693"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: geometric growth of ‖g‖ is the signature of a product with factor > 1.",
+              "That points to a dead gradient path or a disconnected graph.",
+              "That is healthy progress, not instability.",
+              "That could be a balanced binary prior, not explosion."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · BPTT is the chain rule along the unrolled graph: ∂L/∂h₁ = (∂L/∂h_T)·J_T⋯J₂.<br>
+        2 · A recurrent factor below 1 vanishes (0.5²⁰ ≈ 9.5×10⁻⁷); above 1 explodes (1.2²⁰ ≈ 38).<br>
+        3 · Clip the global gradient norm between backward() and step(); g ← g·min(1, τ/‖g‖).
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m2-02">
+      <h2>Cheat sheet — M2·02</h2>
+      <ul>
+        <li>\(\partial\mathcal{L}/\partial\mathbf{h}_1=(\partial\mathcal{L}/\partial\mathbf{h}_T)\prod_{t=2}^{T}J_t\).</li>
+        <li>Scalar shortcut: \(J=s\,\phi'\), \(\tanh'(0)=1\), \(\sigma'(0)=0.25\), ReLU active branch \(=1\).</li>
+        <li>\(\rho(J)=\max|\lambda|\); \(\rho&lt;1\) vanishes, \(\rho&gt;1\) explodes.</li>
+        <li>Worked: \(0.5^{20}=9.5367\times10^{-7}\); \(1.2^{20}\approx38.34\).</li>
+        <li>Clip: \(g\leftarrow g\min(1,\tau/\lVert g\rVert)\); \(g=(3,4),\tau=1\rightarrow(0.6,0.8)\).</li>
+        <li>Order: <code>zero_grad → forward → backward → clip → step</code>.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Werbos, P. J. — <em>Backpropagation Through Time: What It Does and How to Do It</em> (1990).</li>
+      <li>Hochreiter, S. — <em>Long Short-Term Memory</em> (1997).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m2-01-sequences-and-rnns.html">← Sequences and RNNs</a>
+      <a href="m2-03-lstm-and-gru.html">Next: LSTM and GRU →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M2 Sequences &amp; NLP</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m2-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

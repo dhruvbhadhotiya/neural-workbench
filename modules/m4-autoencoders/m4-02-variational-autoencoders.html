@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Variational autoencoders · DeepLearn Lab</title>
+<meta name="description" content="Derive the ELBO in two lines, compute the Gaussian KL in closed form, use the reparameterisation trick, and see how beta changes a VAE.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m4" data-lesson="m4-02" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="index.html" aria-current="page">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 4 · Autoencoders</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M4 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m4-02">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M4 Autoencoders</a> / <span>Variational autoencoders</span>
+    </nav>
+
+    <h1>Variational autoencoders: learn a distribution</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 2 of 5 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact</span> + <span class="badge badge--illustrative">Illustrative</span> labs
+    </p>
+    <p class="lede">
+      A plain autoencoder gives you points in latent space. A VAE gives you a distribution you can
+      sample from — and the ELBO tells you exactly what that freedom costs.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Derive the ELBO in two lines from the KL between an approximate posterior and the true one.</li>
+        <li>Compute the Gaussian KL divergence in closed form, including the \(\mu=1,\sigma=1\) case.</li>
+        <li>Implement the reparameterisation trick and explain where the gradient flows.</li>
+        <li>Predict what a larger \(\beta\) does to the latent distribution and to reconstruction.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        In Lesson 1 the encoder returned one vector \(\mathbf h\) per input. Here it returns the
+        parameters of a <strong>distribution</strong>: a mean \(\boldsymbol\mu\) and a standard
+        deviation \(\boldsymbol\sigma\). The decoder sees a sample \(\mathbf z\) instead of a fixed
+        code. Adding noise to the bottleneck would normally block backpropagation; the
+        reparameterisation trick moves the randomness to a parameter-free input \(\boldsymbol\epsilon\),
+        and the gradients flow through \(\boldsymbol\mu\) and \(\boldsymbol\sigma\) as usual.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a cloud, not a point</h2>
+
+    <p>
+      Let \(\mathbf x\in\mathbb R^D\) be an input, \(\mathbf z\in\mathbb R^{D_z}\) a latent vector,
+      and \(\theta,\phi\) the decoder and encoder parameters. The encoder defines
+      \(q_\phi(\mathbf z\mid\mathbf x)=\mathcal N(\boldsymbol\mu(\mathbf x),\mathrm{diag}(\boldsymbol\sigma^2(\mathbf x)))\);
+      the decoder defines \(p_\theta(\mathbf x\mid\mathbf z)\). The prior is the fixed standard normal
+      \(p(\mathbf z)=\mathcal N(\mathbf 0,I)\). Symbols: \(D\) is the input width, \(D_z\) the latent
+      width, \(I\) the identity matrix, and \(\mathcal N\) a Gaussian density.
+    </p>
+
+    <p>
+      Maximising only reconstruction pushes every posterior to a narrow spike — the ordinary
+      autoencoder we already met. The KL term pulls each posterior toward the prior. Together they
+      make the <em>aggregate</em> posterior over the dataset cover the prior, so a random
+      \(\mathbf z\) lands somewhere the decoder has seen. That is why a VAE can generate.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        ELBO = expected reconstruction log-likelihood minus KL to the prior. Low reconstruction
+        means faithful output; low KL means the latent codes are organised like the prior. \(\beta\)
+        is the price tag on the second term.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="elbo">1 · The ELBO in two lines</h3>
+
+    <p>
+      We want to maximise \(\log p_\theta(\mathbf x)\), but it needs the intractable posterior
+      \(p_\theta(\mathbf z\mid\mathbf x)\). Introduce \(q_\phi\) and use Jensen's inequality on
+      \(\log \mathbb E_{q}\!\left[\frac{p_\theta(\mathbf x,\mathbf z)}{q_\phi(\mathbf z\mid\mathbf x)}\right]\):
+    </p>
+
+    \[ \log p_\theta(\mathbf x)\;\ge\;\underbrace{\mathbb E_{q_\phi(\mathbf z\mid\mathbf x)}\!\left[\log p_\theta(\mathbf x\mid\mathbf z)\right]}_{\text{expected reconstruction log-likelihood}}\;-\;\underbrace{D_{KL}\!\left(q_\phi(\mathbf z\mid\mathbf x)\,\|\,p(\mathbf z)\right)}_{\text{complexity cost}} \;=\; \mathcal L_{\text{ELBO}} \]
+
+    <p>
+      Equivalently, \(\log p_\theta(\mathbf x)=\mathcal L_{\text{ELBO}}+D_{KL}(q_\phi\|\,p_\theta(\mathbf z\mid\mathbf x))\):
+      the gap is itself a KL, so maximising the ELBO minimises the true posterior approximation error.
+      We <em>minimise</em> the loss \(-\mathcal L_{\text{ELBO}}\) in code.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Take one synthetic input with expected reconstruction
+      log-likelihood \(\mathbb E[\log p_\theta(\mathbf x\mid\mathbf z)]=-1.20\) nats and
+      \(D_{KL}(q\|p)=0.25\) nats. Then \(\mathcal L_{\text{ELBO}}=-1.20-0.25=-1.45\) nats and the
+      training loss is \(+1.45\) nats. Lower loss means a better bound — ELBO values are negative,
+      so “larger is better” only applies to the bound itself.
+    </p>
+
+    <h3 id="kl">2 · Closed-form Gaussian KL</h3>
+
+    <p>
+      With \(q=\mathcal N(\boldsymbol\mu,\mathrm{diag}(\boldsymbol\sigma^2))\) and \(p=\mathcal N(\mathbf 0,I)\),
+      the KL has a closed form (no sampling needed). For one latent coordinate:
+    </p>
+
+    \[ D_{KL}\!\left(\mathcal N(\mu,\sigma^2)\,\|\,\mathcal N(0,1)\right)
+       = \tfrac12\left(\mu^2+\sigma^2-1-\log\sigma^2\right)
+       = -\tfrac12\left(1+\log\sigma^2-\mu^2-\sigma^2\right) \]
+
+    <p>
+      For \(D_z\) independent coordinates, sum this over \(j=1,\ldots,D_z\). It is zero exactly when
+      \(\mu=0,\sigma=1\) in every coordinate, i.e. \(q=p\).
+    </p>
+
+    <p>
+      <strong>Worked example (requested case).</strong> Let \(\mu=1\), \(\sigma=1\). Then
+      \(\sigma^2=1\) and \(\log\sigma^2=\log 1=0\), so
+      \(D_{KL}=\tfrac12(1^2+1^2-1-0)=\tfrac12(1)=0.5\) nats. The mean being one standard deviation
+      away from the prior mean costs half a nat. Check the other direction: \(\mu=0,\sigma=0.5\)
+      gives \(\tfrac12(0+0.25-1-\log 0.25)=\tfrac12(-0.75+1.3863)=0.3182\) nats.
+    </p>
+
+    <h3 id="reparam">3 · Reparameterisation</h3>
+
+    <p>
+      Sampling \(\mathbf z\sim q_\phi(\mathbf z\mid\mathbf x)\) directly makes the sampling step
+      non-differentiable with respect to \(\phi\). Write instead
+    </p>
+
+    \[ \mathbf z=\boldsymbol\mu+\boldsymbol\sigma\odot\boldsymbol\epsilon,\qquad \boldsymbol\epsilon\sim\mathcal N(\mathbf 0,I) \]
+
+    <p>
+      where \(\odot\) is elementwise multiplication. Now \(\boldsymbol\epsilon\) is a parameter-free
+      random input, so \(\partial z_j/\partial\mu_j=1\) and \(\partial z_j/\partial\sigma_j=\epsilon_j\)
+      are ordinary derivatives. This is the trick that makes a VAE trainable by backpropagation.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With \(\mu=1,\sigma=2\) and a seeded draw \(\epsilon=-0.5\),
+      \(z=1+2(-0.5)=0\). The gradients through this sample are
+      \(\partial z/\partial\mu=1\) and \(\partial z/\partial\sigma=\epsilon=-0.5\): increasing
+      \(\sigma\) by \(0.1\) would move this particular sample down by \(0.05\). Averaged over many
+      seeded \(\epsilon\), the expected gradient is still correct.
+    </p>
+
+    <h3 id="beta">4 · \(\beta\)-VAE and conditioning</h3>
+
+    <p>
+      A \(\beta\)-VAE puts a weight \(\beta\) on the KL term:
+      \(\mathcal L_\beta=\mathbb E_q[\log p_\theta(\mathbf x\mid\mathbf z)]-\beta D_{KL}(q\|p)\).
+      \(\beta=1\) is the exact ELBO; \(\beta&gt;1\) buys a more prior-like, often more disentangled
+      latent code at the price of blurrier reconstructions. A conditional VAE (cVAE) simply passes
+      a condition \(c\) into both networks:
+      \(q_\phi(\mathbf z\mid\mathbf x,c)\) and \(p_\theta(\mathbf x\mid\mathbf z,c)\).
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Use the \(-1.20\) nats reconstruction and \(0.25\) nats KL
+      from above. With \(\beta=4\), \(\mathcal L_4=-1.20-4(0.25)=-2.20\), so the training loss is
+      \(2.20\) instead of \(1.45\). For conditioning, a 2-D input \(\mathbf x\) plus a 3-class
+      one-hot \(c\) gives a \(2+3=5\)-dimensional encoder input: \((N,5)\) in a batch of \(N\) rows.
+    </p>
+
+    <h2 id="lab">Labs</h2>
+
+    <h3 id="lab-reparam">Lab 1 · From \(\epsilon\) to \(\mathbf z\), with the gradient path</h3>
+    <p>
+      The left panel draws the standard-normal density of \(\epsilon\); the right panel draws
+      \(q(z\mid x)=\mathcal N(\mu,\sigma^2)\). Move \(\mu\), \(\sigma\), or the seeded
+      \(\epsilon\) and watch one draw cross the two densities. The readouts recompute
+      \(z=\mu+\sigma\epsilon\), the two derivatives, and \(\log q(z\mid x)\) from the displayed
+      numbers — nothing here is pre-rendered.
+    </p>
+
+    <section class="lab" data-widget="m4-02-reparam-visual" data-badge="exact"
+             data-title="Reparameterisation: epsilon to z"
+             data-note="Exact: Gaussian pdfs, z = μ + σ ε, its derivatives and log q(z|x) are computed from the slider values in the browser.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="lab-beta">Lab 2 · What a larger \(\beta\) does to a latent cloud</h3>
+    <p>
+      A hand-defined two-component toy density on a latent grid stands in for the aggregate
+      posterior. Move \(\beta\) from 1 to 16: the two blobs move toward the origin and broaden
+      toward the standard normal. The heat map and the grid KL are computed numerically for this
+      toy density — this lab is explicitly <em>illustrative</em>, not a trained network.
+    </p>
+
+    <section class="lab" data-widget="m4-02-beta-vae" data-badge="illustrative"
+             data-title="Beta trade-off on a toy latent density"
+             data-note="Illustrative: a hand-defined mixture on a latent grid morphs with beta; no network is trained and the grid KL is numerical for this toy density only.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      A VAE on synthetic 2-D data: the encoder emits \(\mu\) and \(\log\sigma^2\), the reparameterisation
+      produces \((N,D_z)\), and the loss prints its two terms separately. Shapes are written as
+      \((N,D)\) because this data is a point cloud, not an image batch. Replace the two lines marked
+      <em>dataset swap</em> with MNIST to see the same code on \((N,1,28,28)\).
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+D, DZ = 2, 2
+x = torch.randn(256, D)                      # synthetic data, shape (N=256, D=2)
+
+class VAE(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.enc = nn.Sequential(nn.Linear(D, 32), nn.ReLU(),
+                                 nn.Linear(32, 2 * DZ))   # (N, 2) -> (N, 4)
+        self.dec = nn.Sequential(nn.Linear(DZ, 32), nn.ReLU(),
+                                 nn.Linear(32, D))         # (N, 2) -> (N, 2)
+
+    def forward(self, x):
+        stats = self.enc(x)                  # (N, 4): [mu | logvar]
+        mu, logvar = stats.chunk(2, dim=1)    # each (N, DZ=2)
+        eps = torch.randn_like(mu)            # (N, DZ), parameter-free noise
+        z = mu + torch.exp(0.5 * logvar) * eps   # reparameterisation, (N, DZ)
+        return self.dec(z), mu, logvar        # reconstruction, (N, 2)
+
+model = VAE()
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+for step in range(1500):
+    xhat, mu, logvar = model(x)              # xhat (N, 2); mu, logvar (N, 2)
+    rec = F.mse_loss(xhat, x, reduction="mean")   # mean over N and D
+    kl = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=1).mean()
+    loss = rec + kl                          # beta = 1: negative ELBO
+    opt.zero_grad(); loss.backward(); opt.step()
+
+with torch.no_grad():
+    z = torch.randn(16, DZ)                  # prior samples, shape (16, 2)
+    samples = model.dec(z)                   # generated data, shape (16, 2)
+print("rec", round(rec.item(), 4), "kl", round(kl.item(), 4))</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+tf.random.set_seed(0)
+D, DZ = 2, 2
+x = tf.random.normal([256, D])                # synthetic data, shape (N=256, D=2)
+
+enc_in = keras.Input(shape=(D,))             # (None, 2)
+h = layers.Dense(32, activation="relu")(enc_in)
+mu = layers.Dense(DZ, name="mu")(h)          # (None, DZ=2)
+logvar = layers.Dense(DZ, name="logvar")(h)  # (None, DZ=2)
+
+class Sample(keras.layers.Layer):
+    def call(self, args):                    # z = mu + sigma * eps
+        mu, logvar = args
+        eps = tf.random.normal(tf.shape(mu)) # same shape as mu
+        return mu + tf.exp(0.5 * logvar) * eps
+
+z = Sample()([mu, logvar])                   # (None, DZ)
+dec = layers.Dense(32, activation="relu")(z)
+out = layers.Dense(D)(dec)                   # (None, 2)
+vae = keras.Model(enc_in, out)
+
+def vae_loss(y_true, y_pred):
+    rec = tf.reduce_mean(tf.square(y_pred - y_true))  # mean over N and D
+    kl = -0.5 * tf.reduce_mean(tf.reduce_sum(
+        1 + logvar - tf.square(mu) - tf.exp(logvar), axis=1))
+    return rec + kl
+
+vae.compile(optimizer=keras.optimizers.Adam(1e-3), loss=vae_loss)
+vae.fit(x, x, epochs=30, batch_size=32, verbose=0)
+print("mu shape", mu.shape, "z shape", z.shape)  # (None, 2), (None, 2)</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      The trainer logs the two terms separately on purpose: if KL falls to zero while reconstruction
+      is poor, the model has collapsed. Clamping <code>logvar</code> (for example
+      <code>torch.clamp(logvar, -10, 10)</code>) prevents <code>exp</code> from overflowing on a
+      bad batch. The Keras listing is the same arithmetic with a custom sampling layer; note that
+      Keras works in NHWC internally for images, though this toy data is 2-D.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">KL weight too high</p>
+        <p>
+          With very large \(\beta\), the KL term dominates and the encoder outputs the prior for
+          every input — posterior collapse. Reconstructions become generic and the latent code
+          carries no information about \(\mathbf x\). Raise \(\beta\) gradually and watch both terms.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">exp on unclamped logvar</p>
+        <p>
+          The decoder uses \(\sigma=\exp(\log\sigma^2/2)\). A single large <code>logvar</code> from an
+          unstable batch can overflow to <code>inf</code> and poison training. Clamp
+          <code>logvar</code> to a safe range before exponentiating.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Sampling without no_grad</p>
+        <p>
+          Drawing prior samples for inspection is inference, not training. Wrap it in
+          <code>with torch.no_grad():</code> to avoid keeping an autograd graph for samples you will
+          only display. The reparameterised training sample, by contrast, must keep its graph.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Comparing ELBO across datasets</p>
+        <p>
+          The ELBO is a log-density in nats for a specific data representation: changing from
+          normalised pixel values to 0–255 integers changes reconstruction scale and bitwise
+          discretisation, so the numbers are not comparable. Compare models on the same data and
+          the same likelihood definition.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “KL drops to 0 and every generated sample looks the same.” Training ran
+      happily. The loss implementation is the culprit:
+    </p>
+
+<pre class="code" data-lang="python"><code>def vae_loss(x, xhat, mu, logvar):
+    rec = F.mse_loss(xhat, x)
+    kl = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=1).mean()
+    return 1000.0 * rec + kl    # BUG: reconstruction is effectively ignored</code></pre>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The reconstruction is multiplied by 1000 while the KL is left at weight 1, so the cheapest
+        descent is to drive KL to zero: the encoder outputs \(\mu=0,\log\sigma^2=0\) for every input,
+        and the decoder learns a single average output. This is posterior collapse induced by a
+        scaling mistake. Use matched scales (start with weight 1 on both terms), standardise the
+        inputs, and check that reconstructions still vary with \(\mathbf x\) before tuning \(\beta\).
+      </p>
+      <p class="small muted">
+        Quick detector: print the standard deviation of \(\boldsymbol\mu\) across a batch. If it is
+        near zero while KL is near zero, the encoder has stopped listening to the input.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m4-02">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — variational autoencoders",
+        "questions": [
+          {
+            "q": "The ELBO is made of which two terms?",
+            "options": ["Reconstruction accuracy and classification loss", "Expected log-likelihood minus KL to the prior", "KL to the prior plus a discriminator loss", "Mean squared error plus weight decay"],
+            "correct": 1,
+            "why": [
+              "There is no classification term in the unsupervised ELBO.",
+              "Correct: E_q[log p(x|z)] − D_KL(q(z|x)‖p(z)).",
+              "A discriminator belongs to a GAN, not a VAE.",
+              "Weight decay is an optimiser detail, not part of the bound."
+            ]
+          },
+          {
+            "q": "For a one-dimensional q = N(1, 1) and prior N(0, 1), the KL in nats is…",
+            "options": ["0", "0.5", "1", "1.386"],
+            "correct": 1,
+            "why": [
+              "Only μ = 0 and σ = 1 give zero KL.",
+              "Correct: ½(μ² + σ² − 1 − log σ²) = ½(1 + 1 − 1 − 0) = 0.5.",
+              "That forgets the −1 term in the closed form.",
+              "That is −log(0.25), which appears in a different worked example."
+            ]
+          },
+          {
+            "q": "With z = μ + σ ε and ε = −0.5, what is ∂z/∂σ?",
+            "options": ["1", "−0.5", "0", "σ"],
+            "correct": 1,
+            "why": [
+              "That is ∂z/∂μ, not ∂z/∂σ.",
+              "Correct: the derivative with respect to σ is the current ε, here −0.5.",
+              "A zero gradient would mean the noise blocks backpropagation — the trick prevents that.",
+              "The multiplier is ε, not σ itself."
+            ]
+          },
+          {
+            "q": "Why is reparameterisation needed at all?",
+            "options": ["To make the prior non-Gaussian", "To move randomness off the parameters so gradients can flow through μ and σ", "To remove the KL term", "To turn MSE into cross-entropy"],
+            "correct": 1,
+            "why": [
+              "The prior choice is independent of the sampling trick.",
+              "Correct: ε is parameter-free, so the sample is a differentiable function of μ and σ.",
+              "The KL term stays; it is computed in closed form.",
+              "The likelihood choice is separate from sampling."
+            ]
+          },
+          {
+            "q": "Using E[log p] = −1.20 and KL = 0.25, what is the β-VAE objective at β = 4?",
+            "options": ["−2.20", "−0.20", "−1.45", "2.20"],
+            "correct": 0,
+            "why": [
+              "Correct: −1.20 − 4 × 0.25 = −2.20.",
+              "That adds 4 × 0.25 instead of subtracting it.",
+              "That is β = 1, the plain ELBO.",
+              "That is the training loss (negative ELBO), not the objective being maximised."
+            ]
+          },
+          {
+            "q": "KL ≈ 0 with identical outputs for every latent code usually means…",
+            "options": ["The model has learned a perfect prior", "Posterior collapse", "The learning rate is too small", "The decoder is overfitting"],
+            "correct": 1,
+            "why": [
+              "Matching the prior while ignoring the input is not useful learning.",
+              "Correct: the encoder emits the prior for all x, so z carries no information.",
+              "A small learning rate would slow learning, not erase input dependence specifically.",
+              "An overfitting decoder would still respond to different latent codes."
+            ]
+          },
+          {
+            "q": "A conditional VAE differs from a VAE by…",
+            "options": ["Using a different prior distribution family", "Conditioning both encoder and decoder on c", "Replacing the decoder with a classifier", "Dropping the reconstruction term"],
+            "correct": 1,
+            "why": [
+              "The prior can stay standard normal in a cVAE.",
+              "Correct: q(z|x,c) and p(x|z,c) both receive the condition.",
+              "A classifier head is optional; the generative decoder remains.",
+              "The reconstruction term is still needed."
+            ]
+          },
+          {
+            "q": "Which statement about sampling from a VAE is true?",
+            "options": ["Sample z from the prior N(0,I), then pass it through the decoder", "Sample μ directly from the data", "Use the encoder output as z without noise", "Use top-p truncation on the latent vector"],
+            "correct": 0,
+            "why": [
+              "Correct: the KL term aligns the aggregate posterior with N(0,I), making prior samples plausible.",
+              "μ is a network output, not a sample from a known distribution.",
+              "That is a plain autoencoder, whose latent gaps are unconstrained.",
+              "Top-p is a token-decoding strategy, not a latent-space operation."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · The ELBO is \(\mathbb E_q[\log p_\theta(\mathbf x\mid\mathbf z)]-D_{KL}(q_\phi(\mathbf z\mid\mathbf x)\|p(\mathbf z))\); with \(\mu=1,\sigma=1\), the Gaussian KL is \(\tfrac12(1+1-1-0)=0.5\) nats.<br>
+        2 · Reparameterisation \(\mathbf z=\boldsymbol\mu+\boldsymbol\sigma\odot\boldsymbol\epsilon\) makes the random draw parameter-free, so \(\partial z/\partial\mu=1\) and \(\partial z/\partial\sigma=\epsilon\).<br>
+        3 · Larger \(\beta\) prices the KL more heavily: the latent cloud looks more like the prior while reconstructions blur, and \(\beta=1\) is the exact ELBO.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m4-02">
+      <h2>Cheat sheet — M4·02</h2>
+      <ul>
+        <li>\(\mathcal L_{\text{ELBO}}=\mathbb E_q[\log p_\theta(x|z)]-D_{KL}(q_\phi(z|x)\|p(z))\). Worked: −1.20 − 0.25 = −1.45 nats.</li>
+        <li>\(D_{KL}(\mathcal N(\mu,\sigma^2)\|\mathcal N(0,1))=\tfrac12(\mu^2+\sigma^2-1-\log\sigma^2)\). Worked: μ=1, σ=1 → 0.5.</li>
+        <li>Reparameterisation: \(z=\mu+\sigma\epsilon\), \(\epsilon\sim\mathcal N(0,I)\); derivatives 1 and ε.</li>
+        <li>Train on \(-\mathcal L_{\text{ELBO}}\); implement with \(\mu\) and \(\log\sigma^2\) outputs, and clamp logvar before exp.</li>
+        <li>\(\beta\)-VAE: \(-\mathbb E_q[\log p]+\beta D_{KL}\); β&gt;1 → more prior-like latents, blurrier output.</li>
+        <li>cVAE: \(q_\phi(z|x,c)\), \(p_\theta(x|z,c)\). Detector: μ variance ≈ 0 means posterior collapse.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Kingma, D. P. — <em>Auto-Encoding Variational Bayes</em> (2013).</li>
+      <li>Hoffman, M. D. — <em>Stochastic Variational Inference</em> (2013).</li>
+      <li>Burgess, C. P. — <em>Learning Basic Visual Concepts with a Constrained Variational Framework</em> (2016).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m4-01-autoencoders.html">← Previous: autoencoders</a>
+      <a href="m4-03-bert.html">Next: BERT →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M4 Autoencoders</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m4-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

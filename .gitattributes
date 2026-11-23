@@ -1,0 +1,9 @@
+# Keep text files byte-identical on Windows and GitHub's Linux runners.
+* text=auto eol=lf
+
+# Vendored fonts and binary assets must never be line-ending converted.
+*.woff2 binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

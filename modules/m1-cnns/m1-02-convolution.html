@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Convolution: sliding filters over pixels · DeepLearn Lab</title>
+<meta name="description" content="Cross-correlation, output shapes, padding, stride, dilation and channels — with a live editable kernel and a shape calculator.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m1" data-lesson="m1-02" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="index.html" aria-current="page">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 1 · CNNs</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M1 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m1-02">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M1 CNNs</a> / <span>Convolution</span>
+    </nav>
+
+    <h1>Convolution: sliding filters over pixels</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 2 of 8 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">One output pixel is a dot product between a small weight patch and the image. Change the kernel, stride, padding or dilation and you can predict the exact output shape and every output number.</p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+          <li>Compute Conv2d output height and width from H, W, K, S, P and dilation D.</li>
+          <li>Read a 3×3 kernel as a feature detector and evaluate cross-correlation by hand.</li>
+          <li>Explain what padding, stride and dilation change about the computation.</li>
+          <li>Describe channel mixing and the (C_out, C_in, K_H, K_W) weight layout.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>A linear model has one weight per feature. A conv has one weight per <em>relative offset</em> — the same small pattern is dragged across the image. The sum you compute at each stop is familiar: it is a dot product, just like a neuron's weighted sum.</p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a filter is a stubby neuron</h2>
+
+    <p>
+      A Conv2d layer slides a \(K\times K\) kernel over the input. At each position it multiplies
+      overlapping values and sums them into one output. With zero padding \(P\), the output keeps
+      runnable positions even at the border; with stride \(S\) the kernel jumps \(S\) pixels; with
+      dilation \(D\) the kernel's taps are spaced \(D-1\) pixels apart.
+    </p>
+    <p>
+      In channels, each output filter owns one \(K\times K\) kernel <em>per input channel</em>.
+      The results are summed and one bias is added. Thus a filter can combine colour channels,
+      not just detect a shape in one of them. PyTorch stores the weight as
+      \((C_{out}, C_{in}, K_H, K_W)\) — output filters first, input channels second.
+    </p>
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <p>\(H,W\): input height/width · \(K\): kernel size (assume square) · \(S\): stride ·
+      \(P\): zero padding per side · \(D\): dilation · \(C_{in},C_{out}\): input/output channels ·
+      \(x,y\): input/output values · \(o\): output-channel index.</p>
+    </div>
+    <p>
+      PyTorch's <code>Conv2d</code> computes <strong>cross-correlation</strong>, not the mathematical
+      convolution (which flips the kernel). Because kernel weights are learned, the flip makes no
+      difference to expressive power — but it matters when you hand-code a fixed kernel.
+    </p>
+    
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="crosscorr">1 · The cross-correlation sum</h3>
+    <p>Using the NCHW convention from NOTATION.md, one output value is</p>
+    \[ y_{i,j,o} = \sum_{c=1}^{C_{in}}\sum_{u=1}^{K}\sum_{v=1}^{K}
+       x_{iS+uD,\; jS+vD,\; c}\, W_{o,c,u,v} + b_o \]
+    <p>
+      Worked example, \(C_{in}=C_{out}=1\). Take the 5×5 input
+      \(\begin{bmatrix}1&2&3&4&5\\6&7&8&9&1\\2&3&4&5&6\\7&8&9&1&2\\3&4&5&6&7\end{bmatrix}\)
+      and kernel \(\begin{bmatrix}1&0&-1\\0&1&0\\-1&0&1\end{bmatrix}\).
+      The top-left output (before padding effects) is
+      \(1\cdot1 + 2\cdot0 + 3\cdot(-1) + 6\cdot0 + 7\cdot1 + 8\cdot0 + 2\cdot(-1)+3\cdot0+4\cdot1
+      = 1-3+7-2+4 = \mathbf{7}\).
+      With \(S=2, P=1\) the full computed output is
+      \(\begin{bmatrix}8&5&-4\\3&-5&14\\-5&12&8\end{bmatrix}\) — the lab reproduces these nine numbers.
+    </p>
+
+    <h3 id="outsize">2 · Output size — the one formula</h3>
+    \[ H' = \left\lfloor \frac{H + 2P - D(K-1) - 1}{S} \right\rfloor + 1, \qquad
+       W' = \left\lfloor \frac{W + 2P - D(K-1) - 1}{S} \right\rfloor + 1 \]
+    <p>
+      Worked example: \(H=W=5, K=3, S=2, P=1, D=1\):
+      \(\lfloor(5+2-1\cdot2-1)/2\rfloor+1 = \lfloor4/2\rfloor+1 = \mathbf{3}\), so the output is 3×3.
+    </p>
+    <p>
+      “Same” padding means choosing \(P\) to keep \(H'=H\) when \(S=1\): for odd \(K=3\),
+      \(P=(K-1)/2=1\). For even \(K=2\), no integer \(P\) satisfies \(2P=K-1\); PyTorch's
+      <code>padding="same"</code> puts the extra row/column at the bottom/right.
+    </p>
+
+    <h3 id="dilation">3 · Dilation and cost</h3>
+    <p>
+      The effective kernel span is \(K_{\mathrm{eff}} = D(K-1)+1\). Worked: \(K=3, D=2\) gives
+      \(2(3-1)+1 = 5\): nine weights look at a 5×5 region without paying for 25 weights.
+    </p>
+    <p>
+      Multiply-adds for one conv layer (one image):
+      \(\mathrm{MACs}=H'W'C_{in}C_{out}K^2\). Worked: \(3\cdot3\cdot1\cdot1\cdot9 = 81\) MACs,
+      i.e. 162 floating-point operations if each MAC is counted as a multiply and an add.
+      Parameters remain \(C_{out}C_{in}K^2+C_{out}=1\cdot1\cdot9+1=10\) — sharing again.
+    </p>
+
+    <h3 id="onone">4 · 1×1 convolutions</h3>
+    <p>
+      With \(K=1\), the spatial sum vanishes and the layer is a per-pixel linear map across channels:
+      \(y_{i,j,o}=\sum_c x_{i,j,c}W_{o,c}+b_o\). Worked: \(C_{in}=32, C_{out}=16\) gives
+      \(16\cdot32+16 = 528\) parameters. This is how bottleneck blocks shrink or expand channel
+      counts without touching \(H,W\).
+    </p>
+    
+
+    <h2 id="lab">Hands-on labs</h2>
+    <p class="small muted">Every number below is computed in your browser from the inputs you can change.</p>
+<section class="lab" data-widget="m1-02-conv-explorer" data-badge="exact"
+         data-title="Convolution explorer"
+         data-note="Exact: output maps come from DL.tensor.conv2d on the pixels and kernel you see; size and MACs are recomputed with DL.tensor.outSize.">
+  <div class="lab__body"></div>
+</section>
+
+    <h2 id="code">Code</h2>
+<div class="tabs" data-tabs>
+  <div class="tabs__list" role="tablist">
+    <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+    <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+  </div>
+  <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+x = torch.randn(1, 3, 32, 32)   # (N, C_in, H, W) = (1, 3, 32, 32)
+
+settings = [
+    dict(kernel_size=3, stride=1, padding=1, dilation=1),
+    dict(kernel_size=3, stride=2, padding=1, dilation=1),
+    dict(kernel_size=3, stride=1, padding=2, dilation=2),
+]
+for s in settings:
+    layer = nn.Conv2d(3, 16, **s)     # weight (16, 3, 3, 3)
+    y = layer(x)                      # (1, 16, H', W')
+    print(s, "-&gt;", tuple(y.shape),
+          "params", sum(p.numel() for p in layer.parameters()))
+
+# (1, 3, 32, 32) -&gt; (1,16,32,32), (1,16,16,16), (1,16,32,32)
+# conv params are 16*3*9 + 16 = 448 in all three cases</code></pre>
+  </div>
+  <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+
+# Keras uses NHWC internally: (N, H, W, C). Commented below as NCHW equivalents.
+x = tf.random.normal((1, 32, 32, 3))   # NCHW would be (1, 3, 32, 32)
+
+for k, s, p, dil in [(3, 1, 1, 1), (3, 2, 1, 1), (3, 1, 2, 2)]:
+    if p == 2 and dil == 2:             # padding="same" handles even effective pads
+        layer = tf.keras.layers.Conv2D(16, k, strides=s, dilation_rate=dil,
+                                       padding="same")
+    else:
+        layer = tf.keras.layers.Conv2D(16, k, strides=s, padding=p and "same" or "valid")
+    y = layer(x)                        # (1, H', W', 16); NCHW: (1, 16, H', W')
+    print((k, s, p, dil), "-&gt;", y.shape, "params", layer.count_params())
+
+# Keras weight layout is (K_H, K_W, C_in, C_out): same 448 numbers as PyTorch.</code></pre>
+  </div>
+</div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">“Same” padding with even kernels</p>
+        <p>For K=2 there is no integer P with 2P=K−1. Frameworks assign the extra pad asymmetrically; check the printed H′ instead of assuming perfect symmetry.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting dilation's effective size</p>
+        <p>A 3×3 kernel with D=2 spans 5×5 pixels. Padding chosen for K=3 can leave too little input and silently shrink the output.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Channel order in the weight tensor</p>
+        <p>PyTorch conv weights are (C_out, C_in, K_H, K_W). Keras uses (K_H, K_W, C_in, C_out). Swapping them gives shape errors or a wrong parameter count.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Conv versus mathematical convolution</p>
+        <p>PyTorch implements cross-correlation (no kernel flip). A hand-typed Sobel kernel needs no flipping to match the library output.</p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+    <p>
+      A reader expects a 4×4 output from a 5×5 input with a 3×3 kernel and padding 1, but prints
+      a 2×2 tensor. One hyperparameter is wrong.
+    </p>
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        Stride was left at 2. Substituting into the formula:
+        \(\lfloor(5+2\cdot1-3-1)/2\rfloor+1 = \lfloor3/2\rfloor+1 = 2\).
+        With \(S=1\): \(\lfloor4/1\rfloor+1 = 5\) — that would be a 5×5 “same” output, so to get
+        4×4 use padding 0 with stride 1: \(\lfloor(5-3)/1\rfloor+1=4\).
+      </p>
+      <p class="small muted">Print <code>layer.stride</code>, <code>layer.padding</code> and
+      <code>layer.dilation</code> together; the error is almost always one of those three.</p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+    <section class="quiz" data-quiz="m1-02">
+      <script type="application/json" class="quiz__data">
+{
+  "title": "Check yourself — Convolution",
+  "questions": [
+    {
+      "q": "Output size for H=W=5, K=3, S=2, P=1, D=1?",
+      "options": [
+        "5×5",
+        "3×3",
+        "2×2",
+        "4×4"
+      ],
+      "correct": 1,
+      "why": [
+        "That would need stride 1 and padding 1.",
+        "Correct: floor((5+2−2−1)/2)+1 = 3.",
+        "That is what stride 2 with padding 0 can produce.",
+        "That is stride 1, padding 0."
+      ]
+    },
+    {
+      "q": "The effective span of a K=3 kernel with dilation D=2 is:",
+      "options": [
+        "3",
+        "4",
+        "5",
+        "6"
+      ],
+      "correct": 2,
+      "why": [
+        "That ignores dilation.",
+        "Dilation adds D−1=1 gap per tap, not one total.",
+        "Correct: D(K−1)+1 = 2·2+1 = 5.",
+        "There are only three taps."
+      ]
+    },
+    {
+      "q": "PyTorch Conv2d weight tensor shape is:",
+      "options": [
+        "(C_in, C_out, K_H, K_W)",
+        "(C_out, C_in, K_H, K_W)",
+        "(K_H, K_W, C_in, C_out)",
+        "(C_in, K_H, K_W, C_out)"
+      ],
+      "correct": 1,
+      "why": [
+        "That is a common mental model, not the library layout.",
+        "Correct: output channels first, then input channels.",
+        "That is Keras's layout.",
+        "Not a supported layout."
+      ]
+    },
+    {
+      "q": "A 1×1 conv with C_in=32, C_out=16 and bias has how many parameters?",
+      "options": [
+        "512",
+        "528",
+        "32",
+        "16"
+      ],
+      "correct": 1,
+      "why": [
+        "That omits biases.",
+        "Correct: 16·32 + 16 = 528.",
+        "That is only the input channel count.",
+        "That is only the bias count."
+      ]
+    },
+    {
+      "q": "Multiply-adds for a 3×3 output, 1 input channel, 1 output filter, K=3?",
+      "options": [
+        "9",
+        "27",
+        "81",
+        "162"
+      ],
+      "correct": 2,
+      "why": [
+        "That is one position's taps.",
+        "That is the input area, not the work.",
+        "Correct: 3·3·1·1·9 = 81 MACs.",
+        "That counts each MAC as two FLOPs."
+      ]
+    },
+    {
+      "q": "Cross-correlation differs from mathematical convolution by:",
+      "options": [
+        "A kernel flip",
+        "A bias term",
+        "A normalisation",
+        "Nothing — they are identical"
+      ],
+      "correct": 0,
+      "why": [
+        "Correct: Conv2d does not flip the kernel.",
+        "Both can include bias.",
+        "Neither includes normalisation.",
+        "The flip is the difference."
+      ]
+    },
+    {
+      "q": "Which padding keeps H′=H for K=3, S=1?",
+      "options": [
+        "P=0",
+        "P=1",
+        "P=2",
+        "P=3"
+      ],
+      "correct": 1,
+      "why": [
+        "Valid padding shrinks the map.",
+        "Correct: (K−1)/2 = 1.",
+        "That grows the map to H+2.",
+        "Far too much."
+      ]
+    },
+    {
+      "q": "With stride S=2 and no overlap, a conv output position corresponds to input positions spaced:",
+      "options": [
+        "1 apart",
+        "2 apart",
+        "K apart",
+        "S·K apart"
+      ],
+      "correct": 1,
+      "why": [
+        "That would be stride 1.",
+        "Correct: the window origin moves S pixels each step.",
+        "Kernel size is not the step.",
+        "Only dilation multiplies the tap spacing."
+      ]
+    }
+  ]
+}
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+    <div class="keyidea">
+      <p>
+1 · Conv2d computes cross-correlation: a dot product between a shared K×K kernel and each input patch, summed over input channels.<br>
+2 · Output size is floor((H+2P−D(K−1)−1)/S)+1; for 5×5, K=3, S=2, P=1 it is 3×3.<br>
+3 · Parameters depend on C_in, C_out and K (not H,W); MACs also depend on H′W′ and the dilation changes the span K_eff=D(K−1)+1.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m1-02">
+      <h2>Cheat sheet — M1·02</h2>
+      <ul>
+          <li>\(y_{i,j,o}=\sum_{c,u,v} x_{iS+uD,jS+vD,c}\,W_{o,c,u,v}+b_o\).</li>
+          <li>\(H'=\lfloor (H+2P-D(K-1)-1)/S\rfloor+1\).</li>
+          <li>Worked: \((5+2-2-1)/2=2\Rightarrow H'=3\).</li>
+          <li>Parameters \(C_{out}C_{in}K^2+C_{out}\); MACs \(H'W'C_{in}C_{out}K^2\).</li>
+          <li>Effective kernel \(K_{\mathrm{eff}}=D(K-1)+1\); 3×3 with D=2 spans 5×5.</li>
+          <li>PyTorch weight \((C_{out},C_{in},K_H,K_W)\); Keras \((K_H,K_W,C_{in},C_{out})\).</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+        <li>LeCun, Y. — <em>Gradient-based learning applied to document recognition</em> (1998).</li>
+        <li>Simonyan, K. — <em>Very Deep Convolutional Networks for Large-Scale Image Recognition</em> (2014).</li>
+        <li>Yu, F. — <em>Multi-Scale Context Aggregation by Dilated Convolutions</em> (2015).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m1-01-why-convolutions.html">← Previous: Why convolutions</a>
+      <a href="m1-03-filters-and-pooling.html">Next: Filters & pooling →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M1 CNNs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m1-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

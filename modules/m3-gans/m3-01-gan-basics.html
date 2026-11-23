@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GAN basics: generator, discriminator, minimax · DeepLearn Lab</title>
+<meta name="description" content="Derive the GAN minimax game, the optimal discriminator and the non-saturating generator loss, then train a live 1-D GAN in your browser.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m3" data-lesson="m3-01" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="index.html" aria-current="page">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 3 · Generative models</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M3 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m3-01">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M3 GANs</a> / <span>GAN basics</span>
+    </nav>
+
+    <h1>GAN basics: a game between two networks</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 1 of 4 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      A classifier and a forger improve together. By the end of this lesson you can write both
+      losses, explain the equilibrium, and watch a real 1-D GAN train from random weights.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Write the minimax objective and the non-saturating generator objective, with every symbol defined.</li>
+        <li>Compute the optimal discriminator \(D^\ast(x)\) from two densities and plug in numbers.</li>
+        <li>Explain why both losses settle near \(\log 2\) rather than at zero.</li>
+        <li>Train a 1-D GAN in the browser and read its histogram, decision curve and loss curves.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        In ML you fit \(p(y\mid x)\): a label is given and a model predicts it. A GAN has no labels.
+        It learns to <em>sample</em> from \(p_{\text{data}}(x)\) by training a generator \(G\) to fool a
+        discriminator \(D\). Binary cross-entropy is still the loss — what is new is that the targets
+        come from a competitor whose weights change at the same time.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: the forger and the detective</h2>
+
+    <p>
+      The <strong>generator</strong> \(G\) maps noise \(\mathbf{z}\sim\mathcal{N}(0,I)\) to a sample
+      \(G(\mathbf{z})\). The noise dimension is \(D_z=100\) for image GANs; in the lab below we use
+      \(D_z=1\) so we can draw the whole distribution. The <strong>discriminator</strong> \(D\) receives
+      either a real sample \(\mathbf{x}\sim p_{\text{data}}\) or a fake sample \(G(\mathbf{z})\) and
+      outputs \(D(\cdot)\in(0,1)\), its probability that the input is real.
+    </p>
+
+    <p>
+      \(D\) is trained by ordinary binary cross-entropy with labels 1 (real) and 0 (fake).
+      \(G\) is trained on the same network \(D\), but with the opposite goal: make \(D(G(\mathbf{z}))\)
+      close to 1. When \(G\) improves, \(D\) sees harder fakes; when \(D\) improves, \(G\) gets a
+      sharper signal. At equilibrium neither can improve alone.
+    </p>
+
+    <section class="lab" data-widget="m3-01-gan-1d" data-badge="exact"
+             data-title="A 1-D GAN trained live"
+             data-note="Exact: generator and discriminator are 2-layer MLPs trained in your browser by DL.trainer; every histogram bin, decision curve and loss value is computed from the current weights. The optional reference replay uses a fixed seed and is labelled separately.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Press <span class="pill">Run</span> and watch three panels. Left: the target density is drawn as
+      a smooth curve and the generated samples as a histogram of the same scale. Middle: the
+      discriminator's decision curve \(D(x)\) and the theoretical optimum
+      \(D^\ast(x)=p_{\text{data}}/(p_{\text{data}}+p_g)\); the generated density \(p_g\) is estimated
+      from the histogram with a small kernel. Right: both losses, lightly smoothed so the trend is
+      visible. The two losses oscillate around \(\log 2\approx 0.693\), <em>not</em> zero — that is
+      what a balanced game looks like.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        At equilibrium the generator's samples match the data distribution, so the best any
+        discriminator can do is guess: \(D^\ast(x)=\tfrac12\) everywhere and the value is \(-\log 4\).
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="minimax">1 · The minimax game</h3>
+
+    \[
+      \min_G\max_D V(D,G)=
+      \underbrace{\mathbb{E}_{\mathbf{x}\sim p_{\text{data}}}[\log D(\mathbf{x})]}_{\text{real samples}}
+      \;+\;
+      \underbrace{\mathbb{E}_{\mathbf{z}\sim p_{\mathbf z}}\bigl[\log(1-D(G(\mathbf{z})))\bigr]}_{\text{fake samples}}
+    \]
+
+    <p>
+      Here \(p_{\text{data}}\) is the unknown data distribution, \(p_{\mathbf z}\) the fixed noise
+      distribution, \(G\) the generator with parameters \(\theta_G\), and \(D\) the discriminator
+      with parameters \(\theta_D\). The expectation \(\mathbb{E}\) is an average over samples.
+      \(\log\) is the natural logarithm; the loss is reported as a <em>mean</em> over the batch of
+      \(N\) samples. Maximising \(V\) over \(D\) means making \(\log D(\mathbf{x})\) large on real
+      data and \(\log(1-D(G(\mathbf{z})))\) large on fakes.
+    </p>
+
+    <h3 id="optimal-d">2 · The optimal discriminator</h3>
+
+    \[
+      D^\ast(\mathbf{x})=\frac{p_{\text{data}}(\mathbf{x})}
+      {p_{\text{data}}(\mathbf{x})+p_g(\mathbf{x})}
+    \]
+
+    <p>
+      \(p_g\) is the distribution of the generated samples. To see where this comes from, fix \(G\)
+      and write the integrand for one location \(x\): with \(a=p_{\text{data}}(x)\) and
+      \(b=p_g(x)\), the contribution to \(V\) is \(a\log d+b\log(1-d)\) where \(d=D(x)\).
+      Differentiating in \(d\) and setting to zero gives \(a/d-b/(1-d)=0\), hence \(d=a/(a+b)\).
+    </p>
+
+    <p><strong>Worked example.</strong> Take three locations with these densities:</p>
+
+    <table class="shape-table">
+      <caption>Optimal discriminator from two densities</caption>
+      <thead><tr><th>\(x\)</th><th>\(p_{\text{data}}(x)=a\)</th><th>\(p_g(x)=b\)</th><th>\(D^\ast(x)=a/(a+b)\)</th></tr></thead>
+      <tbody>
+        <tr><td>\(-1\)</td><td>0.60</td><td>0.15</td><td>\(0.60/0.75=0.800\)</td></tr>
+        <tr><td>\(0\)</td><td>0.10</td><td>0.30</td><td>\(0.10/0.40=0.250\)</td></tr>
+        <tr><td>\(1\)</td><td>0.02</td><td>0.20</td><td>\(0.02/0.22=0.0909\)</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Where data is common and fakes are rare, \(D^\ast\) is near 1; where fakes dominate, it is
+      near 0. The lab draws exactly this curve from the current histogram.
+    </p>
+
+    <h3 id="d-loss">3 · Discriminator loss on three samples</h3>
+
+    \[
+      \mathcal{L}_D=-\frac{1}{N}\sum_{n=1}^{N}
+      \bigl[y_n\log d_n+(1-y_n)\log(1-d_n)\bigr],\qquad d_n=D(x_n)
+    \]
+
+    <p>
+      This is binary cross-entropy (BCE) with labels \(y_n\in\{0,1\}\) and mean reduction.
+      In code the network returns a <em>logit</em> \(z_n\) and we use the fused
+      BCE-with-logits loss, which is algebraically the same but numerically stable.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> \(N=3\): two real samples with \(d_1=0.9\), \(d_2=0.2\),
+      one fake sample with \(d_3=0.3\) (so \(y=(1,1,0)\)). Then
+    </p>
+
+    \[
+      \mathcal{L}_D=-\frac{\log 0.9+\log 0.2+\log(1-0.3)}{3}
+      =-\frac{-0.10536-1.60944-0.35667}{3}
+      =\frac{2.07147}{3}=0.69049
+    \]
+
+    <p>
+      Notice that the badly classified real sample \(d_2=0.2\) contributes 1.60944 of the total
+      2.07147: BCE punishes confident mistakes hard.
+    </p>
+
+    <h3 id="nonsat">4 · The generator loss people actually use</h3>
+
+    \[
+      \text{minimax:}\quad \mathcal{L}_G^{\text{sat}}=\mathbb{E}_{\mathbf z}\bigl[\log(1-D(G(\mathbf z)))\bigr],
+      \qquad
+      \text{non-saturating:}\quad \mathcal{L}_G^{\text{ns}}=-\mathbb{E}_{\mathbf z}\bigl[\log D(G(\mathbf z))\bigr]
+    \]
+
+    <p>
+      Both push \(D(G(\mathbf z))\) up, but the gradients behave differently. If the discriminator
+      is confidently right and \(D(G(\mathbf z))=0.3\), then
+      \(\log(1-0.3)=\log 0.7=-0.35667\) is already almost flat, while
+      \(-\log 0.3=1.20397\) still has a useful slope. That is why the non-saturating form is the
+      default in practice; it is the one used in the lab and in the code listing.
+    </p>
+
+    <p>
+      At equilibrium \(p_g=p_{\text{data}}\), so \(D^\ast=\tfrac12\) and
+      \(\mathcal{L}_G^{\text{ns}}=-\log\tfrac12=\log 2=0.69315\). The lab's two loss curves should
+      therefore hover near the same height — that is a feature, not a bug.
+    </p>
+
+    <h3 id="js">5 · What the value of the game measures</h3>
+
+    <p>
+      Substitute \(D^\ast\) back into \(V\). After two lines of algebra (omitted here) the optimum
+      value is
+      \(V(D^\ast,G)=-\log 4+2\,D_{\text{JS}}(p_{\text{data}}\Vert p_g)\), where
+      \(D_{\text{JS}}(p\Vert q)=\tfrac12 D_{\text{KL}}(p\Vert m)+\tfrac12 D_{\text{KL}}(q\Vert m)\)
+      with \(m=(p+q)/2\) and \(D_{\text{KL}}(p\Vert q)=\sum_i p_i\log(p_i/q_i)\).
+      Minimising the game therefore minimises Jensen–Shannon divergence, which is zero exactly
+      when the two distributions match.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Let \(p=(0.5,0.5)\), \(q=(0.25,0.75)\).
+      Then \(m=(0.375,0.625)\).
+    </p>
+
+    \[
+      D_{\text{KL}}(p\Vert m)=0.5\log\tfrac{0.5}{0.375}+0.5\log\tfrac{0.5}{0.625}=0.03227
+    \]
+    \[
+      D_{\text{KL}}(q\Vert m)=0.25\log\tfrac{0.25}{0.375}+0.75\log\tfrac{0.75}{0.625}=0.03537
+    \]
+    \[
+      D_{\text{JS}}=\tfrac12(0.03227+0.03537)=0.03382,\qquad
+      V(D^\ast,G)=-\log 4+2(0.03382)=-1.31865
+    \]
+
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <p>
+        \(N\) batch size · \(G\), \(D\) generator and discriminator · \(\theta_G,\theta_D\) their
+        parameters · \(\mathbf{z}\in\mathbb{R}^{D_z}\) latent noise · \(D_z\) latent dimension ·
+        \(p_{\mathbf z}=\mathcal{N}(0,I)\) noise distribution · \(p_{\text{data}}\) data distribution ·
+        \(p_g\) generated distribution · \(d\in(0,1)\) discriminator probability · \(y\in\{0,1\}\)
+        real/fake label · \(\mathcal{L}\) mean loss · \(\eta\) learning rate · \(D_{\text{KL}}\),
+        \(D_{\text{JS}}\) divergences.
+      </p>
+    </div>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      A complete 1-D GAN in PyTorch. The target is a two-mode mixture generated in the script — no
+      download. The crucial line is <code>fake.detach()</code> in the discriminator update: it turns
+      the generator's output into a plain tensor so \(D\)'s step does not change \(G\)'s weights.
+      Both networks output logits and use the fused BCE loss.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+torch.manual_seed(0)
+
+# Synthetic 1-D data: two Gaussians at -1.2 and +1.2.  Shape (512, 1).
+x_real = (torch.randn(512, 1) * 0.3
+          + torch.where(torch.rand(512, 1) &gt; 0.5,
+                        torch.tensor(1.2), torch.tensor(-1.2)))
+
+def block(i, o):
+    return nn.Sequential(nn.Linear(i, o), nn.Tanh())
+
+G = nn.Sequential(block(1, 16), block(16, 16), nn.Linear(16, 1))
+D = nn.Sequential(block(1, 16), block(16, 16), nn.Linear(16, 1))
+opt_g = torch.optim.Adam(G.parameters(), lr=1e-3)
+opt_d = torch.optim.Adam(D.parameters(), lr=1e-3)
+bce = nn.BCEWithLogitsLoss()          # logits in, mean over the batch
+
+for step in range(2000):
+    z = torch.randn(32, 1)            # (N, D_z) = (32, 1)
+    fake = G(z)                       # (N, 1): G's graph is alive
+
+    # --- discriminator step: real -> 1, fake -> 0 -----------------------
+    opt_d.zero_grad()
+    real_idx = torch.randint(0, len(x_real), (32,))
+    d_real = D(x_real[real_idx])      # (32, 1) logits
+    d_fake = D(fake.detach())         # detach: do NOT train G here
+    loss_d = bce(d_real, torch.ones_like(d_real)) \
+           + bce(d_fake, torch.zeros_like(d_fake))
+    loss_d.backward()
+    opt_d.step()
+
+    # --- generator step: make D(G(z)) -> 1 ------------------------------
+    opt_g.zero_grad()
+    d_on_fake = D(G(z))               # fresh sample; D's grads are harmless
+    loss_g = bce(d_on_fake, torch.ones_like(d_on_fake))
+    loss_g.backward()                 # backprop through D into G
+    opt_g.step()
+
+if step % 100 == 0:
+    with torch.no_grad():
+        samples = G(torch.randn(4096, 1)).squeeze(1)
+    print(step, round(loss_d.item(), 4), round(loss_g.item(), 4),
+          round(samples.mean().item(), 3), round(samples.std().item(), 3))
+
+print("G params", sum(p.numel() for p in G.parameters()))   # 2-layer MLP, 1 -> 16 -> 16 -> 1
+print("D params", sum(p.numel() for p in D.parameters()))
+</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      The two losses should settle near \(\log 2 \approx 0.693\), not zero. Different seeds give
+      different sample histograms; this toy problem is for understanding the game, not for
+      measuring quality.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Training \(D\) to convergence each step</p>
+        <p>
+          A perfect \(D\) gives almost zero gradient to \(G\). Take one \(D\) step (or a few) per
+          \(G\) step, not hundreds. A discriminator accuracy near 100% early on means \(D\) is
+          winning too hard.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">BCE on logits</p>
+        <p>
+          Applying <code>sigmoid</code> and then <code>BCELoss</code> computes the log of a
+          saturated probability. Output logits and use <code>BCEWithLogitsLoss</code>; the browser
+          lab uses the fused version in <code>DL.nn.MLP</code> too.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting <code>detach()</code></p>
+        <p>
+          In the \(D\) update, <code>D(fake)</code> backpropagates into \(G\) unless you detach.
+          You then optimise the wrong gradient — and both losses can fall together for a while,
+          which looks like success but is not the game you meant to play.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Same learning rate by reflex</p>
+        <p>
+          \(G\) and \(D\) have different tasks and can learn at different speeds. The two-timescale
+          rule (TTUR) deliberately uses a different \(\eta\) for each. Start with both near
+          \(10^{-3}\) here, then tune them separately.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “both my generator and discriminator losses fall smoothly toward zero, and
+      my fake samples are all the same number.” The code is the listing above with one line changed.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The <code>fake.detach()</code> call was removed in the discriminator update. Now the
+        discriminator's gradients flow into the generator, so the same gradient step is trying to
+        make \(D\) both accept and reject the fakes: the two networks collude on a constant output
+        that the discriminator can classify perfectly, and both losses collapse together. Restore
+        <code>fake.detach()</code> in the \(D\) update, and keep the \(G\) update on a freshly
+        generated <code>G(z)</code> so its graph is intact.
+      </p>
+      <p class="small muted">
+        Second thing to check: a generator whose output is unbounded can run far outside the data
+        range. In the lab the generator ends in \(\tanh\) scaled to the data span, which keeps the
+        game on the same canvas.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m3-01">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — GAN basics",
+        "questions": [
+          {
+            "q": "What does a GAN learn, as opposed to a classifier?",
+            "options": [
+              "A mapping from x to a label y",
+              "A way to sample from the data distribution p_data",
+              "A closed-form density p(x) that can be evaluated exactly",
+              "A reconstruction of each training example"
+            ],
+            "correct": 1,
+            "why": [
+              "That is supervised classification; GANs have no labels.",
+              "Correct: G transforms noise into samples that resemble p_data.",
+              "A GAN gives samples, not an explicitly normalised density.",
+              "That is an autoencoder's job, not a GAN's."
+            ]
+          },
+          {
+            "q": "In the minimax objective, what does D(x) mean?",
+            "options": [
+              "The probability that x came from the data rather than G",
+              "The latent code that generated x",
+              "The gradient of the generator",
+              "The JS divergence between p_data and p_g"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: D outputs a probability of 'real' in (0,1).",
+              "The latent code is z, an input to G.",
+              "Gradients are not outputs of D.",
+              "JS divergence is a property of the two distributions, not of D."
+            ]
+          },
+          {
+            "q": "At a fixed location with p_data = 0.6 and p_g = 0.15, what is D*(x)?",
+            "options": ["0.15", "0.25", "0.60", "0.80"],
+            "correct": 3,
+            "why": [
+              "That is p_g alone; D* divides by the sum of both densities.",
+              "That would be the answer for p_data = 0.1 and p_g = 0.3.",
+              "That is p_data alone; the denominator matters.",
+              "Correct: 0.6/(0.6+0.15) = 0.6/0.75 = 0.8."
+            ]
+          },
+          {
+            "q": "Three samples have D values 0.9 (real), 0.2 (real), 0.3 (fake). What is the mean BCE?",
+            "options": ["0.35667", "0.69049", "1.20397", "2.07147"],
+            "correct": 1,
+            "why": [
+              "That is log(1-0.3) for the single fake sample.",
+              "Correct: -(log 0.9 + log 0.2 + log 0.7)/3 = 2.07147/3 = 0.69049.",
+              "That is the non-saturating generator loss at D = 0.3.",
+              "That is the summed BCE before dividing by N = 3."
+            ]
+          },
+          {
+            "q": "Why is the non-saturating generator loss preferred over log(1 - D(G(z)))?",
+            "options": [
+              "It is bounded below by zero",
+              "It keeps a useful gradient when D confidently rejects the fakes",
+              "It removes the need for a discriminator",
+              "It makes D's loss exactly zero"
+            ],
+            "correct": 1,
+            "why": [
+              "The minimax loss can be negative; boundedness is not the point.",
+              "Correct: -log D(G(z)) has a much larger gradient when D(G(z)) is small.",
+              "Both losses still require D.",
+              "Nothing about G's loss makes D's loss zero."
+            ]
+          },
+          {
+            "q": "Why must fake samples be detached during the discriminator update?",
+            "options": [
+              "To stop D from updating G's weights in that step",
+              "Because detach converts logits into probabilities",
+              "Because BCE cannot backpropagate through G",
+              "Because D must be frozen while G trains"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: the D step must change only theta_D.",
+              "detach has no effect on values, only on gradient flow.",
+              "BCE can backpropagate; we choose not to during the D step.",
+              "D is frozen in the G step only if you choose to do so, not via detach."
+            ]
+          },
+          {
+            "q": "When p_g = p_data at equilibrium, what is D*(x)?",
+            "options": ["0", "0.5 everywhere", "1 everywhere", "Equal to p_data(x)"],
+            "correct": 1,
+            "why": [
+              "A zero discriminator would mean G produces nothing like real data.",
+              "Correct: p_data/(p_data+p_data) = 1/2, so D can only guess.",
+              "That would mean D is perfect, the opposite of equilibrium.",
+              "That is the formula only when p_g is different from p_data."
+            ]
+          },
+          {
+            "q": "The value of the minimax game at the optimal D is -log 4 + 2·JS(p_data || p_g). If the distributions match, JS = 0 and the value is…",
+            "options": ["0", "-log 2", "-log 4 ≈ -1.3863", "log 2 ≈ 0.6931"],
+            "correct": 2,
+            "why": [
+              "The game's value is negative even when the match is perfect.",
+              "That would be the value of a different two-player constant.",
+              "Correct: -log 4 + 0 = -1.38629.",
+              "log 2 is the generator's BCE at equilibrium, not the game value."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · The GAN trains G to sample p_data by maximising a binary classification objective that D simultaneously minimises.<br>
+        2 · The optimal discriminator is p_data/(p_data+p_g); at equilibrium it is 1/2 and both BCE losses sit near log 2.<br>
+        3 · Use BCE with logits, detach fake samples in D's step, and the non-saturating loss for G.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m3-01">
+      <h2>Cheat sheet — M3·01</h2>
+      <ul>
+        <li>\(\min_G\max_D V=\mathbb{E}_{x\sim p_{\text{data}}}\log D(x)+\mathbb{E}_{z}\log(1-D(G(z)))\).</li>
+        <li>\(D^\ast(x)=p_{\text{data}}/(p_{\text{data}}+p_g)\); if \(p_g=p_{\text{data}}\) then \(D^\ast=\tfrac12\).</li>
+        <li>Non-saturating: \(\mathcal{L}_G=-\mathbb{E}_z\log D(G(z))\); at equilibrium \(=\log 2\approx0.69315\).</li>
+        <li>\(V(D^\ast,G)=-\log4+2D_{\text{JS}}\); JS = 0 iff the distributions match.</li>
+        <li>Two updates per step: D on real(1)+fake(0) with <code>fake.detach()</code>, then G on fresh <code>G(z)</code> labelled 1.</li>
+        <li>Logits in, <code>BCEWithLogitsLoss</code> out — never sigmoid twice.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Goodfellow, I. — <em>Generative Adversarial Nets</em> (2014).</li>
+      <li>Arjovsky, M. — <em>Towards Principled Methods for Training Generative Adversarial Networks</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="index.html">← Module overview</a>
+      <a href="m3-02-training-and-evaluating-gans.html">Next: training &amp; evaluating GANs →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M3 GANs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m3-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

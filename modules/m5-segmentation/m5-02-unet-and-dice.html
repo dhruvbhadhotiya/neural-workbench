@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>U-Net, Dice and IoU · DeepLearn Lab</title>
+<meta name="description" content="Build a U-Net with skip connections, count its shapes and parameters, and score masks with Dice and IoU including the empty-mask smoothing case.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m5" data-lesson="m5-02" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="index.html" aria-current="page">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 5 · Segmentation &amp; Kaggle</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M5 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m5-02" style="overflow-x:hidden">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M5 Segmentation</a> / <span>U-Net, Dice &amp; IoU</span>
+    </nav>
+
+    <h1>U-Net, skips, and scoring masks</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 2 of 4 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      An encoder shrinks the image until semantics are easy. A symmetric decoder grows it back —
+      and skip connections return the pixels the pooling threw away.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Trace every block of a 4-level U-Net: output shape and parameter count.</li>
+        <li>Explain what skip connections carry and why a shape mismatch is a real bug.</li>
+        <li>Train with a Dice + BCE objective and evaluate with IoU and Dice.</li>
+        <li>Handle empty masks without producing NaN, and know what smoothing implies.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        An autoencoder bottleneck compresses an image into a small vector. A U-Net keeps the same
+        hourglass but replaces the single vector with a pyramid of feature maps, and <em>shortcuts</em>
+        each encoder level to its decoder twin. Classification accuracy is replaced by IoU: a
+        strict overlap score that punishes even a one-pixel shift.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: the hourglass with shortcuts</h2>
+
+    <p>
+      The encoder applies two \(3\times3\) convolutions at each level, then a \(2\times2\) max pool.
+      Channels double as \(H,W\) halve. The bottleneck holds the most abstract features at the
+      smallest grid. The decoder upsamples by 2, concatenates the matching encoder map, then
+      applies two more convolutions. Finally a \(1\times1\) head turns channels into class logits.
+    </p>
+
+    <p>
+      Why skip? Pooling is information-destroying: a boundary that survives at \(256\times256\)
+      is blurred into a coarse decision at \(16\times16\). Concatenation gives the decoder the
+      original high-resolution channels back, so it can localise while using the bottleneck's
+      semantic decisions. It must be a <strong>concatenation</strong> along the channel axis, not
+      an addition — the two tensors carry different information.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Skips trade memory for detail: every saved encoder map is re-read by the decoder, which is
+        why U-Nets are memory-hungry but extremely sample-efficient.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="trace">1 · Shape trace for a 4-level U-Net</h3>
+
+    <p>
+      Config: input \((N,C,H,W)=(1,3,256,256)\), levels \(L=4\), base channels \(B=64\),
+      classes \(=1\). Per level, channels are \(B\cdot2^i\); two \(3\times3\) convs with padding 1
+      keep \(H,W\); a \(2\times2/2\) pool halves them. The bottleneck has \(B\cdot2^4=1024\)
+      channels. Each decoder upsample doubles \(H,W\), then the skip from encoder level \(i\) adds
+      \(B\cdot2^i\) channels before two \(3\times3\) convs. All counts below are arithmetic from
+      \(K^2 C_{in} C_{out}+C_{out}\) with \(K=3\), evaluated for each block.
+    </p>
+
+    <div class="table-wrap">
+    <table class="shape-table" style="table-layout:fixed;word-break:break-word">
+      <caption>4-level U-Net trace, base 64, 3×256×256 → 1 channel</caption>
+      <thead>
+        <tr><th>block</th><th>output \((N,C,H,W)\)</th><th>params (this block)</th><th>arithmetic</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>enc0 · 2 convs + pool</td><td>(1, 64, 128, 128)</td><td>38,720</td><td>(9·3·64+64)+(9·64·64+64)</td></tr>
+        <tr><td>enc1 · 2 convs + pool</td><td>(1, 128, 64, 64)</td><td>221,440</td><td>(9·64·128+128)+(9·128·128+128)</td></tr>
+        <tr><td>enc2 · 2 convs + pool</td><td>(1, 256, 32, 32)</td><td>885,248</td><td>(9·128·256+256)+(9·256·256+256)</td></tr>
+        <tr><td>enc3 · 2 convs + pool</td><td>(1, 512, 16, 16)</td><td>3,539,968</td><td>(9·256·512+512)+(9·512·512+512)</td></tr>
+        <tr><td>bottleneck · 2 convs</td><td>(1, 1024, 16, 16)</td><td>14,157,824</td><td>(9·512·1024+1024)+(9·1024·1024+1024)</td></tr>
+        <tr><td>dec3 · up + skip 512 + 2 convs</td><td>(1, 512, 32, 32)</td><td>9,438,208</td><td>(9·1536·512+512)+(9·512·512+512)</td></tr>
+        <tr><td>dec2 · up + skip 256 + 2 convs</td><td>(1, 256, 64, 64)</td><td>2,359,808</td><td>(9·768·256+256)+(9·256·256+256)</td></tr>
+        <tr><td>dec1 · up + skip 128 + 2 convs</td><td>(1, 128, 128, 128)</td><td>590,080</td><td>(9·384·128+128)+(9·128·128+128)</td></tr>
+        <tr><td>dec0 · up + skip 64 + 2 convs</td><td>(1, 64, 256, 256)</td><td>147,584</td><td>(9·192·64+64)+(9·64·64+64)</td></tr>
+        <tr><td>head · 1×1 conv</td><td>(1, 1, 256, 256)</td><td>65</td><td>1·1·64·1+1</td></tr>
+        <tr><td><strong>total</strong></td><td>—</td><td><strong>31,378,945</strong></td><td>sum of all blocks</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <p class="small muted">
+      Counts come from the displayed arithmetic, one \(K^2 C_{in}C_{out}+C_{out}\) per convolution.
+      The decoder's first convolution is the easy one to get wrong: after concatenating, its input
+      is \(1024+512=1536\) channels at dec3, not 1024.
+    </p>
+
+    <section class="lab" data-widget="m5-02-unet-explorer" data-badge="exact"
+             data-title="U-Net shape and parameter explorer"
+             data-note="Exact: every block shape and every parameter count is recomputed from your input size, level count and base channels; the skip toggle shows the actual spatial mismatch.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Try an input size of 100 with three levels in the explorer: \(100\to50\to25\to12\) on the way
+      down, then \(12\to24\) on the way up. The skip wants 25 rows but the decoder has 24. Padding
+      the convolutions correctly does not fix this — the odd spatial size does. Crop the skip,
+      pad the decoder, or choose sizes divisible by \(2^L\).
+    </p>
+
+    <h3 id="scores">2 · IoU and Dice on a 6×6 toy mask</h3>
+
+    <p>
+      Let \(A\) be the predicted set of foreground pixels and \(B\) the ground-truth set:
+    </p>
+
+    \[ \mathrm{IoU}=\frac{|A\cap B|}{|A\cup B|},\qquad
+       \mathrm{Dice}=\frac{2|A\cap B|}{|A|+|B|} \]
+
+    <p>
+      <strong>Worked example.</strong> Take a 6×6 grid with ground truth \(B=\) rows 1–3, columns
+      1–3 (a \(3\times3\) block, \(|B|=9\)) and prediction \(A=\) rows 1–3, columns 2–4
+      (shifted one column right, \(|A|=9\)):
+    </p>
+
+    <table class="shape-table">
+      <caption>6×6 toy mask · X = intersection, A = prediction only, B = truth only</caption>
+      <thead><tr><th>row \ col</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>.</td><td>.</td><td>.</td><td>.</td><td>.</td><td>.</td></tr>
+        <tr><td>1</td><td>.</td><td>B</td><td>X</td><td>X</td><td>A</td><td>.</td></tr>
+        <tr><td>2</td><td>.</td><td>B</td><td>X</td><td>X</td><td>A</td><td>.</td></tr>
+        <tr><td>3</td><td>.</td><td>B</td><td>X</td><td>X</td><td>A</td><td>.</td></tr>
+        <tr><td>4</td><td>.</td><td>.</td><td>.</td><td>.</td><td>.</td><td>.</td></tr>
+        <tr><td>5</td><td>.</td><td>.</td><td>.</td><td>.</td><td>.</td><td>.</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Intersection: \(3\cdot2=6\) cells. Union: 9 + 9 − 6 = 12 cells.
+    </p>
+
+    \[ \mathrm{IoU}=6/12=0.5,\qquad \mathrm{Dice}=2\cdot6/(9+9)=12/18\approx0.667 \]
+
+    <p>
+      The identity \(\mathrm{Dice}=2\,\mathrm{IoU}/(1+\mathrm{IoU})\) checks out:
+    </p>
+
+    \[ 2(0.5)/(1+0.5)=1/1.5\approx0.667 \]
+
+    <p>
+      Dice is always at least IoU; both are 1 only for a perfect mask.
+    </p>
+
+    <h3 id="smooth">3 · Empty masks and smoothing</h3>
+
+    <p>
+      If \(A=B=\varnothing\), then \(|A|=|B|=|A\cup B|=0\) and both formulas are \(0/0\). A
+      smoothed Dice with \(\epsilon=1\) is
+    </p>
+
+    \[ \mathrm{Dice}_{\epsilon}=\frac{2|A\cap B|+\epsilon}{|A|+|B|+\epsilon} \]
+
+    <p>
+      <strong>Worked cases with \(\epsilon=1\).</strong> Both masks empty: the numerator and
+      denominator are both 1, so the score is 1 — the implementation declares two empty masks a
+      perfect match. Prediction empty, truth of size 9: \(1/10=0.1\) instead of 0. Neither is
+      magic; both are conventions you must state, because they change the metric on empty images.
+    </p>
+
+    <section class="lab" data-widget="m5-02-iou-dice" data-badge="exact"
+             data-title="Drag two masks: intersection, union, IoU and Dice"
+             data-note="Exact: overlap counts, IoU, Dice and per-class scores are recomputed from the two grids you drag.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="objective">4 · Dice + BCE objective</h3>
+
+    <p>
+      BCE gives well-calibrated probabilities but struggles when foreground is 1% of the image;
+      Dice optimises overlap directly but has a noisy gradient on tiny objects. Their sum is the
+      standard compromise:
+    </p>
+
+    \[ \mathcal{L}=\mathcal{L}_{\mathrm{BCE}}+\mathcal{L}_{\mathrm{Dice}} \]
+    \[ \mathcal{L}_{\mathrm{BCE}}=-\frac{1}{M}\sum_i\left[g_i\log p_i+(1-g_i)\log(1-p_i)\right] \]
+    \[ \mathcal{L}_{\mathrm{Dice}}=1-\frac{2\sum_i p_i g_i+\epsilon}{\sum_i p_i+\sum_i g_i+\epsilon} \]
+
+    <p>
+      Here \(M=H\cdot W\) is the number of pixels in one mask, \(p_i\in(0,1)\) the predicted
+      probability and \(g_i\in\{0,1\}\) the target at pixel \(i\).
+      <strong>Worked check:</strong> for one foreground pixel with \(p=0.8,g=1\),
+      BCE contributes \(-\log0.8\approx0.223\); with \(p=0.2\) it contributes \(-\log0.2\approx1.609\).
+      A Dice term weights the overlap of all \(M\) pixels at once.
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      A compact U-Net trained on synthetic shapes generated in the file, with the combined loss.
+      PyTorch comes first; the Keras tab shows the same architecture in NHWC internally (the course
+      still describes tensors as NCHW).
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+from torch.nn import functional as F
+
+def conv(cin, cout):
+    return nn.Sequential(nn.Conv2d(cin, cout, 3, padding=1, bias=False),
+                         nn.BatchNorm2d(cout), nn.ReLU(inplace=True))
+
+class UNet(nn.Module):
+    def __init__(self, base=16, classes=1):
+        super().__init__()
+        ch = [base * 2**i for i in range(5)]
+        self.enc = nn.ModuleList([conv(3 if i == 0 else ch[i-1], ch[i]) for i in range(4)])
+        self.bot = nn.Sequential(conv(ch[4], ch[4]), conv(ch[4], ch[4]))
+        self.dec = nn.ModuleList([
+            nn.Sequential(conv(ch[i] * 2, ch[i]), conv(ch[i], ch[i])) for i in range(3, -1, -1)
+        ])
+        self.head = nn.Conv2d(base, classes, 1)
+
+    def forward(self, x):                       # x: (N, C, H, W)
+        skips = []
+        for block in self.enc:
+            skips.append(block(x))              # save before pooling
+            x = F.max_pool2d(skips[-1], 2)      # H,W -> H//2, W//2
+        x = self.bot(x)
+        for block, skip in zip(self.dec, reversed(skips)):
+            x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+            x = torch.cat([skip, x], dim=1)     # concat on the CHANNEL axis
+            x = block(x)
+        return self.head(x)                     # logits: (N, classes, H, W)
+
+def dice_loss(p, g, eps=1.0):                   # p: probabilities, g: target mask
+    p, g = p.flatten(1), g.flatten(1)
+    return 1 - (2 * (p * g).sum(1) + eps) / (p.sum(1) + g.sum(1) + eps)
+
+def synthetic_batch(n=4, size=64):               # no downloads: squares on noise
+    x = torch.rand(n, 3, size, size)
+    yy, xx = torch.meshgrid(torch.arange(size), torch.arange(size), indexing="ij")
+    g = ((xx >= 16) & (xx &lt; 40) & (yy >= 16) & (yy &lt; 40)).float()[None, None].repeat(n, 1, 1, 1)
+    return x, g
+
+x, g = synthetic_batch()
+model, opt = UNet(), torch.optim.Adam(model.parameters(), lr=1e-3)
+for step in range(20):
+    p = torch.sigmoid(model(x))
+    loss = F.binary_cross_entropy(p, g) + dice_loss(p, g).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+print(float(loss))                               # shape (1, 1, 64, 64) masks throughout</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+
+def conv(cin, cout):
+    return tf.keras.Sequential([
+        tf.keras.layers.Conv2D(cout, 3, padding="same", use_bias=False),
+        tf.keras.layers.BatchNormalization(), tf.keras.layers.Activation("relu"),
+    ])
+
+def unet(base=16):
+    ch = [base * 2**i for i in range(5)]
+    skips = []
+    x = inp = tf.keras.Input(shape=(64, 64, 3))    # Keras uses NHWC internally
+    for i in range(4):
+        x = conv(3 if i == 0 else ch[i-1], ch[i])(x)
+        skips.append(x)
+        x = tf.keras.layers.MaxPooling2D(2)(x)
+    x = conv(ch[4], ch[4])(conv(ch[4], ch[4])(x))
+    for block, skip in zip(
+        [tf.keras.Sequential([conv(ch[i]*2, ch[i]), conv(ch[i], ch[i])]) for i in range(3, -1, -1)],
+        reversed(skips)):
+        x = tf.keras.layers.UpSampling2D(2)(x)
+        x = tf.keras.layers.Concatenate(axis=-1)([skip, x])  # channel axis is last here
+        x = block(x)
+    out = tf.keras.layers.Conv2D(1, 1)(x)                   # logits
+    return tf.keras.Model(inp, out)
+
+def dice_loss(g, logits, eps=1.0):
+    p = tf.sigmoid(logits)
+    g, p = tf.reshape(g, [-1]), tf.reshape(p, [-1])
+    return 1 - (2*tf.reduce_sum(p*g) + eps) / (tf.reduce_sum(p) + tf.reduce_sum(g) + eps)
+
+model = unet()
+model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),
+              loss=lambda g, z: tf.keras.losses.binary_crossentropy(g, z, from_logits=True) + dice_loss(g, z))
+print(model.count_params())</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      Use <code>from_logits=True</code> with raw logits, or apply sigmoid and use plain BCE — never both.
+      Synthetic shapes here are generated in-file; no dataset is downloaded.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Concatenating in the wrong order</p>
+        <p>
+          \(\mathrm{cat}(\text{decoder},\text{skip})\) and \(\mathrm{cat}(\text{skip},\text{decoder})\)
+          have the same shape but different channel semantics. Pick one convention, keep it in every
+          block, and mirror it in inference code.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Pooling with <code>ceil_mode</code> mismatch</p>
+        <p>
+          PyTorch's <code>ceil_mode=True</code> can produce 25 from 49 where floor gives 24. The
+          decoder then upsamples to 48 or 50 and the skip no longer aligns. Keep one rounding rule.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">BCE on logits without <code>from_logits</code></p>
+        <p>
+          Passing logits to a probability-loss applies no sigmoid, so negative values produce
+          invalid logarithms. Apply sigmoid first or use the fused/<code>from_logits</code> form.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Unsmoothed Dice on empty masks</p>
+        <p>
+          \(0/0\) yields NaN, and one NaN in a batch poisons the gradient for every image. Add
+          \(\epsilon\), and decide explicitly whether two empty masks should score 1.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      The skip concatenation in the first decoder block throws
+      <code>sizes of tensors must match except in dimension 1. Got 64 and 32</code>. The channel
+      counts are correct; the spatial ones are not.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        One encoder branch used \(3\times3\) convolutions with <code>padding=0</code>. Two such
+        convs shrink each axis by 4 before the pool, so the saved skip is \(64\times64\) while the
+        decoder, built from padded convs, is \(32\times32\). Use <code>padding=1</code> on every
+        \(3\times3\) in both branches (or crop the skip to the decoder size). Print each skip's
+        shape after the encoder — that table is faster than reading the traceback.
+      </p>
+      <p class="small muted">
+        Also verify odd input sizes: even with correct padding, \(100\to50\to25\to12\) breaks the
+        upsample/skip alignment because 25 is odd.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m5-02">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — U-Net, Dice and IoU",
+        "questions": [
+          {
+            "q": "In a 4-level U-Net with base 64, how many channels does the bottleneck have?",
+            "options": ["512", "64×2³ = 512", "64×2⁴ = 1024", "1024×2 = 2048"],
+            "correct": 2,
+            "why": [
+              "That is the last encoder level before the final pool.",
+              "That is the deepest encoder level, not the bottleneck.",
+              "Correct: channels double at each of the four levels, so base·2⁴ = 1024.",
+              "There is no fifth doubling in this config."
+            ]
+          },
+          {
+            "q": "Why does a U-Net concatenate skip connections instead of using them only at the bottleneck?",
+            "options": [
+              "To increase the learning rate",
+              "To restore high-resolution spatial detail lost by pooling",
+              "To reduce the number of parameters",
+              "To replace the loss function"
+            ],
+            "correct": 1,
+            "why": [
+              "Skips do not touch the optimiser.",
+              "Correct: early feature maps carry boundaries and locations the bottleneck no longer has.",
+              "Skips add parameters through the wider decoder convs; they cost memory.",
+              "The loss is independent of the connection pattern."
+            ]
+          },
+          {
+            "q": "For a 3×3 intersection of 6 and a union of 12 cells, IoU and Dice are…",
+            "options": ["0.5 and 0.667", "0.667 and 0.5", "0.5 and 0.5", "0.75 and 0.857"],
+            "correct": 0,
+            "why": [
+              "Correct: 6/12 = 0.5 and 2·6/(9+9) = 0.667.",
+              "The two scores are reversed; Dice is never below IoU.",
+              "Dice differs unless predicted and true areas are equal.",
+              "Those would need an intersection of 9."
+            ]
+          },
+          {
+            "q": "Which identity links Dice and IoU for the same two masks?",
+            "options": ["Dice = IoU²", "Dice = 2·IoU/(1+IoU)", "Dice = 1 − IoU", "Dice = IoU/(2+IoU)"],
+            "correct": 1,
+            "why": [
+              "That is not the algebraic relation between the set expressions.",
+              "Correct: with I=intersection and areas a,b, Dice = 2I/(a+b) and IoU = I/(a+b−I) rearrange to this.",
+              "That would make Dice small when overlap is good.",
+              "The factor 2 belongs in the numerator."
+            ]
+          },
+          {
+            "q": "With ε=1 smoothing, what is Dice when both prediction and target masks are empty?",
+            "options": ["NaN", "0", "1", "0.5"],
+            "correct": 2,
+            "why": [
+              "Smoothing exists precisely to avoid NaN.",
+              "Unsmoothed it is undefined; the smoothed formula gives (0+1)/(0+1)=1.",
+              "Correct: (2·0+1)/(0+0+1) = 1, a convention that must be documented.",
+              "There is no term producing one half."
+            ]
+          },
+          {
+            "q": "Why combine Dice with BCE instead of using Dice alone?",
+            "options": [
+              "Dice is not differentiable",
+              "BCE gives calibrated probabilities while Dice optimises overlap directly",
+              "BCE removes the need for a sigmoid",
+              "Dice cannot handle class imbalance"
+            ],
+            "correct": 1,
+            "why": [
+              "Dice is differentiable; its gradient is just noisy for tiny objects.",
+              "Correct: the two terms are complementary and are simply added.",
+              "Plain BCE needs probabilities; the fused form needs logits.",
+              "Dice is often chosen precisely because it is robust to imbalance."
+            ]
+          },
+          {
+            "q": "Deep supervision in a U-Net means…",
+            "options": [
+              "Adding a loss at intermediate decoder scales as well as the final output",
+              "Training only the deepest layer",
+              "Using a deeper optimizer",
+              "Replacing max-pool with strided conv"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: auxiliary losses at several scales improve gradient flow to early layers.",
+              "Freezing other layers is the opposite of deep supervision.",
+              "Optimizer depth is not a concept here.",
+              "That is an architectural choice unrelated to supervision."
+            ]
+          },
+          {
+            "q": "Why train U-Nets on random patches when GPU memory allows full images?",
+            "options": [
+              "Patches increase the IoU score by definition",
+              "Patches give more diverse local context per batch and fit memory limits",
+              "Patches remove the need for validation",
+              "Full images cannot be resized"
+            ],
+            "correct": 1,
+            "why": [
+              "The metric is computed on full images; patches do not change its definition.",
+              "Correct: sampling patches is a standard memory and sample-efficiency trick.",
+              "Validation is still required on held-out full images.",
+              "Full images can be resized; the issue is activation memory."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · A U-Net halves resolution and doubles channels four times, then mirrors that path with skips that must match in space and channels.<br>
+        2 · IoU = |A∩B|/|A∪B| and Dice = 2|A∩B|/(|A|+|B|) = 2IoU/(1+IoU); on the 6×6 shift they score 0.5 and 0.667.<br>
+        3 · Dice+BCE balances overlap against calibration, and ε-smoothing prevents 0/0 — but it also declares two empty masks a perfect match.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m5-02">
+      <h2>Cheat sheet — M5·02</h2>
+      <ul>
+        <li>Conv params: \(K^2C_{in}C_{out}+C_{out}\); 2-level U-Net, base 16, 64² → 1 class: 118,273 total.</li>
+        <li>4-level, base 64, 256²: 31,378,945 parameters (arithmetic above).</li>
+        <li>Skip channels after upsample at dec\(i\): \(B2^{i+1}+B2^{i}\).</li>
+        <li>\(\mathrm{IoU}=|A\cap B|/|A\cup B|\) and \(\mathrm{Dice}=2|A\cap B|/(|A|+|B|)\).</li>
+        <li>Identity: \(\mathrm{Dice}=2\,\mathrm{IoU}/(1+\mathrm{IoU})\).</li>
+        <li>Smoothed Dice: \((2|A\cap B|+\epsilon)/(|A|+|B|+\epsilon)\), \(\epsilon=1\).</li>
+        <li>Loss = BCE + Dice; logits need the fused BCE, probabilities need plain BCE.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Ronneberger, O. — <em>U-Net: Convolutional Networks for Biomedical Image Segmentation</em> (2015).</li>
+      <li>Milletari, F. — <em>V-Net: Fully Convolutional Neural Networks for Volumetric Medical Image Segmentation</em> (2016).</li>
+      <li>Sudre, C. — <em>Generalised Dice Overlap as a Deep Learning Loss Function for Highly Unbalanced Segmentations</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m5-01-segmentation-and-fcn.html">← Segmentation and FCNs</a>
+      <a href="m5-03-mask-rcnn.html">Next: Mask R-CNN →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M5 Segmentation &amp; Kaggle</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m5-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Losses, computation graphs and backpropagation · DeepLearn Lab</title>
+<meta name="description" content="Derive the chain rule through a two-layer network, compute a full backward pass by hand, and check analytic gradients against finite differences.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m0" data-lesson="m0-02" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="index.html" aria-current="page">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 0 · Foundations</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M0 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m0-02">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M0 Foundations</a> / <span>Losses &amp; backprop</span>
+    </nav>
+
+    <h1>Losses, computation graphs and backpropagation</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 2 of 5 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Backpropagation is the chain rule with bookkeeping. Work one tiny network all the way through,
+      then watch the browser check every gradient you derived.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Derive the backward pass of a 2→3→1 network using local derivatives.</li>
+        <li>Write MSE, BCE and cross-entropy with their derivatives and reductions.</li>
+        <li>Explain what autograd caches and why <code>.grad</code> accumulates.</li>
+        <li>Verify an analytic gradient against a central-difference approximation.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        In logistic regression you differentiated the log-loss once and got
+        \(\nabla_W\mathcal{L} = (p-y)x\). Nothing new is needed for a deep net: each layer contributes
+        its own local derivative, and the chain rule multiplies them from the output back to the input.
+        The only new habit is <strong>caching the forward values</strong> that the backward pass needs.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: blame flows backwards</h2>
+
+    <p>
+      A forward pass is a relay race. Each layer receives an activation, computes a weighted sum,
+      applies a nonlinearity and hands the result to the next layer. Training is a second race run
+      in reverse: the loss hands each layer a number that says “how much did you move the error?”
+      That number is the gradient with respect to the layer's output. Multiply by the layer's local
+      derivative, pass the result further back, and repeat.
+    </p>
+
+    <p>
+      The reason this is efficient is <em>reuse</em>. A naive differentiation of the whole network
+      would recompute the same subexpressions for every parameter. Backprop stores one gradient per
+      intermediate value and reuses it for all parameters upstream, so one forward pass plus one
+      backward pass gives every gradient at once.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Forward: compute and remember. Backward: multiply the incoming gradient by each local
+        derivative, going from the loss to the parameters. Same cost order for any depth.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <p>
+        \(\mathbf{x}\in\mathbb{R}^{2}\) one input; \(\mathbf{W}_1\in\mathbb{R}^{3\times2}\),
+        \(\mathbf{b}_1\in\mathbb{R}^{3}\) first-layer parameters; \(\mathbf{z}_1\) pre-activation;
+        \(\mathbf{h}=\phi(\mathbf{z}_1)\) hidden activation with \(\phi=\mathrm{ReLU}\);
+        \(\mathbf{W}_2\in\mathbb{R}^{1\times3}\), \(b_2\) output parameters;
+        \(\hat y = z_2\) the scalar prediction; \(y\) the target; \(N\) batch size;
+        \(\mathcal{L}\) the scalar loss; \(\delta_l=\partial\mathcal{L}/\partial\mathbf{z}_l\)
+        the error signal at layer \(l\); \(\eta\) the learning rate; \(\theta\) all parameters.
+        We use the <strong>mean</strong> reduction over \(N\) unless stated otherwise.
+      </p>
+    </aside>
+
+    <h3 id="chain">1 · The chain rule, one local step at a time</h3>
+
+    <p>
+      If \(a=\phi(z)\) and \(\mathcal{L}\) depends on \(a\), then
+    </p>
+
+    \[ \frac{\partial\mathcal{L}}{\partial z}
+       = \frac{\partial\mathcal{L}}{\partial a}\,\frac{\partial a}{\partial z}
+       = \frac{\partial\mathcal{L}}{\partial a}\,\phi'(z) \]
+
+    <p>
+      Worked numbers with the mean-squared-error loss for one sample. Take
+      \(\mathbf{x}=(1,2)\), \(\mathbf{W}_1=\begin{bmatrix}0.5&-0.4&0.2\\0.1&0.3&-0.2\end{bmatrix}\),
+      \(\mathbf{b}_1=(0.1,-0.1,0.05)\),
+      \(\mathbf{W}_2=(1.0,\,-0.5,\,2.0)\) and \(b_2=0.2\), target \(y=0.5\).
+    </p>
+
+    <p>
+      Forward: \(\mathbf{z}_1 = (0.5+0.2+0.1,\;-0.4+0.6-0.1,\;0.2-0.4+0.05)
+      = (0.80,\,0.10,\,-0.15)\), so \(\mathbf{h}=(0.80,\,0.10,\,0)\) after ReLU.
+      Then \(z_2 = 0.80(1.0)+0.10(-0.5)+0(2.0)+0.2 = 0.95\) and
+      \(\mathcal{L}=(0.95-0.5)^2 = 0.2025\).
+    </p>
+
+    <p>
+      Backward: \(\partial\mathcal{L}/\partial z_2 = 2(\hat y-y) = 2(0.95-0.5) = 0.9\).
+      ReLU derivatives at \(z_1\) are \((1,1,0)\), so the error signal reaching the first layer is
+      \(\boldsymbol\delta_1 = \mathbf{W}_2^\top(0.9)\odot(1,1,0)
+      = (0.9,\,-0.45,\,1.8)\odot(1,1,0) = (0.9,\,-0.45,\,0)\).
+      The third hidden unit is <em>dead</em>: its gradient is exactly zero.
+    </p>
+
+    <h3 id="jacobian">2 · The Jacobian view</h3>
+
+    <p>
+      For a vector layer, the local derivative is a Jacobian \(J\) with
+      \(J_{ij}=\partial a_i/\partial z_j\). An elementwise activation has a diagonal Jacobian:
+    </p>
+
+    \[ J_\phi = \operatorname{diag}\big(\phi'(z_1),\dots,\phi'(z_D)\big) \]
+
+    <p>
+      With \(\mathbf{z}_1=(0.80,0.10,-0.15)\) above,
+      \(J_\phi=\operatorname{diag}(1,1,0)\). A gradient vector \((0.9,-0.45,1.8)\) entering this
+      layer leaves as \((0.9,-0.45,0)\). Frameworks never build the full diagonal matrix; they
+      store the three numbers and multiply elementwise.
+    </p>
+
+    <h3 id="losses">3 · Losses and their derivatives</h3>
+
+    <p><strong>MSE</strong> for regression, with \(\hat y_n\) the prediction and \(y_n\) the target:</p>
+
+    \[ \mathcal{L}_{\text{MSE}}=\frac{1}{N}\sum_{n=1}^{N}\lVert \hat y_n-y_n\rVert^2,
+       \qquad \frac{\partial\mathcal{L}}{\partial\hat y_n}=\frac{2}{N}(\hat y_n-y_n) \]
+
+    <p>
+      Worked with \(\hat y=(0.95,2.05)\), \(y=(0.5,1.0)\), \(N=2\): errors \((0.45,1.05)\),
+      squares \((0.2025,1.1025)\), mean \(\mathcal{L}=0.6525\). The gradient is
+      \((2\cdot0.45/2,\,2\cdot1.05/2)=(0.45,1.05)\).
+    </p>
+
+    <p><strong>BCE</strong> for probabilities \(\hat y\in(0,1)\) and binary targets \(y\in\{0,1\}\):</p>
+
+    \[ \mathcal{L}_{\text{BCE}}=-\frac{1}{N}\sum_{n=1}^{N}
+       \big[y_n\log\hat y_n+(1-y_n)\log(1-\hat y_n)\big],
+       \qquad \frac{\partial\mathcal{L}}{\partial\hat y_n}
+       =-\frac{1}{N}\left(\frac{y_n}{\hat y_n}-\frac{1-y_n}{1-\hat y_n}\right) \]
+
+    <p>
+      Worked with \(\hat y=(0.8,0.2)\), \(y=(1,0)\), \(N=2\): the two per-sample losses are
+      \(-\log 0.8=0.2231\) and \(-\log(1-0.2)=0.2231\), so \(\mathcal{L}=0.2231\).
+      Gradients: \(-1/(2\cdot0.8)=-0.625\) and \(+1/(2\cdot0.8)=+0.625\).
+      If you have logits \(z\) instead, use the fused BCE-with-logits form
+      \(\max(z,0)-zy+\log(1+e^{-|z|})\); it avoids \(\log 0\).
+    </p>
+
+    <p><strong>Cross-entropy</strong> for \(K\) classes, logits \(\mathbf{z}\), target index \(y\):</p>
+
+    \[ \mathrm{softmax}(\mathbf{z})_i=\frac{e^{z_i}}{\sum_j e^{z_j}},\qquad
+       \mathcal{L}_{\text{CE}}=-\log\mathrm{softmax}(\mathbf{z})_y,\qquad
+       \frac{\partial\mathcal{L}}{\partial\mathbf{z}}=\mathrm{softmax}(\mathbf{z})-\mathbf{e}_y \]
+
+    <p>
+      Worked with \(\mathbf{z}=(2.0,1.0,0.1)\) and \(y=1\):
+      \(e^{2.0}=7.3891,\;e^{1.0}=2.7183,\;e^{0.1}=1.1052\), sum \(=11.2126\).
+      Probabilities \((0.6592,0.2424,0.0986)\), so \(\mathcal{L}=-\log 0.2424=1.4171\).
+      The gradient is \((0.6592,\;0.2424-1,\;0.0986)=(0.6592,-0.7576,0.0986)\).
+      The elegant cancellation is why frameworks fuse softmax and CE.
+    </p>
+
+    <p><strong>Hinge</strong> for targets \(y\in\{-1,+1\}\):</p>
+
+    \[ \mathcal{L}_{\text{hinge}}=\frac{1}{N}\sum_n\max(0,1-y_n\hat y_n),\qquad
+       \frac{\partial\mathcal{L}}{\partial\hat y_n}=\begin{cases}-y_n/N & y_n\hat y_n&lt;1\\0&\text{otherwise}\end{cases} \]
+
+    <p>
+      Worked with \(\hat y=0.4\), \(y=+1\), \(N=1\): \(1-1(0.4)=0.6&gt;0\), so \(\mathcal{L}=0.6\)
+      and the gradient is \(-1\). A confident correct point \(\hat y=1.4\) gives loss \(0\) and
+      gradient \(0\).
+    </p>
+
+    <h3 id="recurrence">4 · The full backward recurrence</h3>
+
+    <p>
+      For layer \(l\) with activation \(\phi_l\), incoming error \(\boldsymbol\delta_{l+1}\),
+      weight matrix \(\mathbf{W}_{l+1}\) and cached input activation \(\mathbf{a}_{l-1}\):
+    </p>
+
+    \[ \boldsymbol\delta_l = (\mathbf{W}_{l+1}^\top\boldsymbol\delta_{l+1})\odot\phi_l'(\mathbf{z}_l),
+       \qquad \frac{\partial\mathcal{L}}{\partial\mathbf{W}_l}=\boldsymbol\delta_l\,\mathbf{a}_{l-1}^\top,
+       \qquad \frac{\partial\mathcal{L}}{\partial\mathbf{b}_l}=\boldsymbol\delta_l \]
+
+    <p>
+      Continue the worked network from §1. With \(\delta_2=0.9\), the output weights get
+      \(\partial\mathcal{L}/\partial\mathbf{W}_2=(h_1\delta_2)=
+      (0.8\cdot0.9,\,0.1\cdot0.9,\,0\cdot0.9)=(0.72,0.09,0)\), while
+      \(\partial\mathcal{L}/\partial b_2=\delta_2=0.9\). The first-layer gradients are
+      \(\boldsymbol\delta_1(1,2)=(0.9,1.8)\), \((0,-0.45,0)\), \((0,0,0)\) in the three
+      columns: explicitly
+      \(\partial\mathcal{L}/\partial\mathbf{W}_1=
+      \begin{bmatrix}0.9&-0.45&0\\1.8&-0.9&0\end{bmatrix}\) and
+      \(\partial\mathcal{L}/\partial\mathbf{b}_1=(0.9,-0.45,0)\).
+      A gradient-descent step with \(\eta=0.1\) would change \(W_{1,1,1}\) from \(0.1\) to \(0.08\):
+      \(0.1-0.1(1.8)=0.08\).
+    </p>
+
+    <h2 id="lab">Lab: click through a real backward pass</h2>
+
+    <p>
+      Step through <strong>Forward → Backward → Grad check</strong>, then click any node to see
+      its value and the gradient that flows through it. The network uses the same
+      \(\mathbf{x}=(1,2)\), target \(0.5\) and ReLU hidden layer as the worked example, with weights
+      drawn by <code>DL.nn</code> from a fixed seed. Every displayed number is computed in your
+      browser; the finite-difference check uses <code>DL.nn.gradCheck</code>.
+    </p>
+
+    <section class="lab" data-widget="m0-02-backprop-stepper" data-badge="exact"
+             data-title="Backpropagation stepper: 2 → 3 → 1"
+             data-note="Exact: activations and gradients come from DL.nn; maxRelError compares analytic gradients with central differences computed live.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="autograd">5 · What autograd actually stores</h3>
+
+    <p>
+      When you call <code>loss.backward()</code>, a framework walks the graph built during the
+      forward pass and applies each operation's local derivative. It needs the forward values:
+      multiplying by \(\mathbf{W}\) needs the input, and multiplying by \(\mathbf{x}\) needs
+      \(\mathbf{W}\). That is why memory grows with batch size even at inference-like model size,
+      and why <code>torch.no_grad()</code> saves memory at evaluation.
+    </p>
+
+    <ul>
+      <li><strong>Leaf tensors</strong> are parameters you created with <code>requires_grad=True</code>; they receive a <code>.grad</code> buffer.</li>
+      <li><strong>Intermediate tensors</strong> hold the graph edges and cached values; their gradients are freed after use unless retained.</li>
+      <li><strong>Accumulation</strong> means <code>.grad</code> is <em>added to</em>, not overwritten — deliberate for gradient accumulation, disastrous if forgotten in a normal loop.</li>
+      <li><strong>Numerical check</strong>: central difference
+        \(\frac{f(\theta+\varepsilon)-f(\theta-\varepsilon)}{2\varepsilon}\) with
+        \(\varepsilon=10^{-5}\) should match the analytic gradient to a relative error near \(10^{-6}\).
+      </li>
+    </ul>
+
+    <p>
+      Worked check for one scalar parameter: if \(f(\theta)=\theta^2\), at \(\theta=3\),
+      analytic \(\nabla=6\); with \(\varepsilon=10^{-5}\),
+      \((3.00001^2-2.99999^2)/(2\cdot10^{-5}) = (9.0000600001-8.9999400001)/0.00002 = 6\).
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      The hand derivation in PyTorch. Note that <code>.grad</code> is populated on the leaf tensors
+      only, and that <code>gradcheck</code> needs double precision and freshly created leaves.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+
+# Same network as the worked example: 2 -&gt; 3 (ReLU) -&gt; 1, mean squared error.
+torch.manual_seed(0)
+x = torch.tensor([1., 2.], dtype=torch.float64)  # shape (2,), match parameter dtype
+y = torch.tensor(0.5, dtype=torch.float64)       # scalar target
+W1 = torch.tensor([[0.5, -0.4, 0.2],             # shape (2, 3)
+                   [0.1,  0.3, -0.2]], dtype=torch.float64, requires_grad=True)
+b1 = torch.tensor([0.1, -0.1, 0.05], dtype=torch.float64, requires_grad=True)
+W2 = torch.tensor([[1.0], [-0.5], [2.0]], dtype=torch.float64, requires_grad=True)  # (3, 1)
+b2 = torch.tensor([0.2], dtype=torch.float64, requires_grad=True)
+
+z1 = x @ W1 + b1                                 # (3,) : [0.8, 0.1, -0.15]
+h = torch.relu(z1)                               # (3,) : [0.8, 0.1, 0.0]
+z2 = h @ W2 + b2                                 # (1,) : [0.95]
+loss = (z2 - y).pow(2).mean()                    # scalar : 0.2025
+loss.backward()                                  # fills .grad on W1, b1, W2, b2
+
+print("z1", [round(v, 4) for v in z1.tolist()])
+print("loss", round(loss.item(), 4))
+print("dW1", W1.grad.tolist())                   # [[0.9,-0.45,0],[1.8,-0.9,0]]
+print("db1", b1.grad.tolist())                   # [0.9,-0.45,0]
+print("dW2", W2.grad.tolist())                   # [[0.72],[0.09],[0.0]]
+print("db2", b2.grad.tolist())                   # [0.9]
+
+# Numerical check: rebuild fresh leaves (gradcheck perturbs them) and use float64.
+p = [t.detach().clone().requires_grad_(True) for t in (W1, b1, W2, b2)]
+def f(a, c, d, e):
+    return ((torch.relu(x @ a + c) @ d + e - y) ** 2).sum()
+print("gradcheck", torch.autograd.gradcheck(f, p))  # True
+
+# In a training loop, ALWAYS clear the accumulated gradients first:
+# optimizer.zero_grad(); loss.backward(); optimizer.step()</code></pre>
+      </div>
+    </div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Gradients accumulate silently</p>
+        <p>
+          PyTorch adds to <code>.grad</code>. Without <code>zero_grad()</code> the second step uses
+          roughly twice the true gradient, the third three times, and the loss eventually explodes.
+          Accumulate on purpose only when simulating a larger batch.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">In-place edits on graph tensors</p>
+        <p>
+          Modifying a tensor needed for backward (for example <code>x.add_(1)</code> after it was
+          used) corrupts the saved value and raises a version-counter error. Build a new tensor
+          instead; leave in-place updates to optimizer step on leaf parameters.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Softmax applied twice</p>
+        <p>
+          <code>CELoss</code> expects probabilities while <code>CrossEntropyLoss</code> expects
+          logits. Passing logits to the former gives nonsense; applying your own softmax before the
+          latter flattens the gradient. Choose one fused operation.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Sign or reduction mistakes</p>
+        <p>
+          Descent subtracts the gradient; ascent adds it. Check the reduction too: a sum over a
+          batch of 64 is 64× larger than a mean, which effectively multiplies \(\eta\) by 64.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader trains a 4-layer classifier. The loss falls for ~20 steps, then rises, then becomes
+      <code>nan</code>. The learning rate is reasonable, the data is normalized, and the labels look
+      correct. The training loop is:
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The loop is missing <code>optimizer.zero_grad()</code>. Gradients from earlier minibatches
+        are still in every <code>.grad</code> buffer, so the effective learning rate grows with the
+        step count. Add it before <code>loss.backward()</code> and the loss will be smooth again.
+      </p>
+      <p class="small muted">
+        Diagnostic: print <code>p.grad.abs().max()</code> for one parameter on the first three
+        steps. If it grows roughly 1×, 2×, 3× with identical-looking batches, accumulation is the
+        cause. If it is already huge on step 1, inspect the loss reduction or the learning rate.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m0-02">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — losses and backprop",
+        "questions": [
+          {
+            "q": "For h = ReLU(z) with z = (0.8, 0.1, −0.15), which local derivative vector does backprop multiply with the incoming gradient?",
+            "options": ["(1, 1, 1)", "(1, 1, 0)", "(0.8, 0.1, 0)", "(0, 0, 1)"],
+            "correct": 1,
+            "why": [
+              "That would be the derivative of the identity, not ReLU.",
+              "Correct: ReLU'(z) = 1 for z > 0 and 0 for z < 0, so the third unit blocks the gradient.",
+              "Those are the activation values, not the derivative values.",
+              "That would select only the unit with negative pre-activation."
+            ]
+          },
+          {
+            "q": "Continuing the worked network with δ₂ = 0.9 and h = (0.8, 0.1, 0), what is ∂L/∂W₂?",
+            "options": ["(0.9, 0.9, 0.9)", "(0.72, 0.09, 0)", "(0.8, 0.1, 0)", "(0.72, −0.09, 0)"],
+            "correct": 1,
+            "why": [
+              "That is the gradient of the bias, repeated; weights also need the input activation.",
+              "Correct: each entry is hᵢ·δ₂ = (0.8·0.9, 0.1·0.9, 0·0.9).",
+              "That is just the hidden activation; it omits the incoming error.",
+              "The sign comes from δ₂, which is positive here."
+            ]
+          },
+          {
+            "q": "Cross-entropy with logits z = (2.0, 1.0, 0.1) and target index 1. What is ∂L/∂z?",
+            "options": [
+              "(0.6592, 0.2424, 0.0986)",
+              "(0.6592, −0.7576, 0.0986)",
+              "(0, −1, 0)",
+              "(−0.6592, 0.7576, −0.0986)"
+            ],
+            "correct": 1,
+            "why": [
+              "Those are the softmax probabilities, before subtracting the one-hot target.",
+              "Correct: softmax(z) − e_y subtracts 1 only at the target index.",
+              "That would be the gradient with respect to the probability, not the logit.",
+              "That is the negative of the correct gradient, i.e. an ascent direction."
+            ]
+          },
+          {
+            "q": "Why do frameworks cache forward activations for the backward pass?",
+            "options": [
+              "To draw the computation graph in the documentation",
+              "Because many local derivatives depend on the forward inputs or pre-activations",
+              "To avoid calling the loss function twice",
+              "Because parameters cannot be read after the forward pass"
+            ],
+            "correct": 1,
+            "why": [
+              "Graph visualisation is a debugging feature, not the reason for caching.",
+              "Correct: ∂(Wx)/∂W needs x and φ′ needs z; both are produced in the forward pass.",
+              "The loss is evaluated once; caching refers to intermediate layer values.",
+              "Parameters remain readable; it is the intermediate values that are reused."
+            ]
+          },
+          {
+            "q": "A central-difference check at θ = 3 for f(θ) = θ² uses ε = 1e−5. What value should it return?",
+            "options": ["3", "6", "9", "0"],
+            "correct": 1,
+            "why": [
+              "That is θ itself, not the derivative.",
+              "Correct: ((3+ε)² − (3−ε)²)/(2ε) = 6, matching the analytic gradient.",
+              "That is f(3), the function value.",
+              "The two terms do not cancel; the difference is 12ε."
+            ]
+          },
+          {
+            "q": "What does a high maxRelError from gradCheck most likely indicate?",
+            "options": [
+              "The model has too many parameters",
+              "The analytic gradient and the numerical gradient disagree — check the backward code",
+              "The learning rate is too small",
+              "The activation is ReLU"
+            ],
+            "correct": 1,
+            "why": [
+              "Parameter count is unrelated to the agreement of two gradient estimators.",
+              "Correct: gradCheck compares analytic and finite-difference gradients element by element.",
+              "The check does not perform an optimisation step.",
+              "ReLU is fine as long as no sampled pre-activation sits exactly at kink points."
+            ]
+          },
+          {
+            "q": "With MSE over N = 2 predictions (0.95, 2.05) and targets (0.5, 1.0), what is the mean loss?",
+            "options": ["0.2025", "1.1050", "0.6525", "1.5000"],
+            "correct": 2,
+            "why": [
+              "That is only the first squared error.",
+              "That is the sum of the squared errors without dividing by N = 2.",
+              "Correct: ((0.95−0.5)² + (2.05−1.0)²)/2 = (0.2025+1.1025)/2 = 0.6525.",
+              "That does not come from the stated formula."
+            ]
+          },
+          {
+            "q": "Which sequence correctly describes one training iteration in PyTorch?",
+            "options": [
+              "backward() → zero_grad() → step()",
+              "zero_grad() → step() → backward()",
+              "zero_grad() → backward() → step()",
+              "step() → backward() → zero_grad()"
+            ],
+            "correct": 2,
+            "why": [
+              "Clearing after backward deletes the gradients you just computed.",
+              "Stepping before backprop uses stale (or zero) gradients.",
+              "Correct: clear old gradients, compute new ones, then update parameters.",
+              "The first step would use gradients from the previous iteration."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Backprop is the chain rule applied locally: δₗ = (Wₗ₊₁ᵀδₗ₊₁) ⊙ φ′(zₗ), and ∂L/∂Wₗ = δₗaₗ₋₁ᵀ.<br>
+        2 · Fused CE gives the clean gradient softmax(z) − e_y; MSE and BCE need the 2/N or 1/N reduction kept straight.<br>
+        3 · Autograd caches forward values and accumulates gradients — clear them each step and verify with finite differences.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m0-02">
+      <h2>Cheat sheet — M0·02</h2>
+      <ul>
+        <li>Chain rule: \(\partial\mathcal{L}/\partial z = (\partial\mathcal{L}/\partial a)\,\phi'(z)\).</li>
+        <li>ReLU′(z) = 1 for z &gt; 0, 0 for z &lt; 0; zero-gradient units are “dead”.</li>
+        <li>MSE: \(\frac{1}{N}\sum(\hat y-y)^2\), gradient \(2(\hat y-y)/N\).</li>
+        <li>BCE: \(-y\log\hat y-(1-y)\log(1-\hat y)\); use logits + fused loss.</li>
+        <li>CE: \(-\log\mathrm{softmax}(z)_y\), gradient \(\mathrm{softmax}(z)-e_y\).</li>
+        <li>Order: <code>zero_grad()</code> → <code>backward()</code> → <code>step()</code>.</li>
+        <li>Gradient check: \((f(\theta+\varepsilon)-f(\theta-\varepsilon))/(2\varepsilon)\), \(\varepsilon=10^{-5}\).</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Rumelhart, D. — <em>Learning Representations by Back-propagating Errors</em> (1986).</li>
+      <li>LeCun, Y. — <em>Backpropagation Applied to Handwritten Zip Code Recognition</em> (1989).</li>
+      <li>Bottou, L. — <em>Large-Scale Machine Learning with Stochastic Gradient Descent</em> (2010).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m0-01-perceptron-to-mlp.html">← Perceptron → MLP</a>
+      <a href="m0-03-gradient-descent-and-optimizers.html">Next: optimizers →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M0 Foundations</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m0-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

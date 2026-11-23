@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mask R-CNN · DeepLearn Lab</title>
+<meta name="description" content="Region proposals, RoIAlign bilinear sampling, the mask head and its per-pixel BCE loss — worked on a 4×4 feature grid with a fractional RoI.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m5" data-lesson="m5-03" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="index.html" aria-current="page">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 5 · Segmentation &amp; Kaggle</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M5 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m5-03">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M5 Segmentation</a> / <span>Mask R-CNN</span>
+    </nav>
+
+    <h1>Mask R-CNN: detection with a pixel mask per box</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 3 of 4 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Faster R-CNN proposes boxes; Mask R-CNN adds a small fully convolutional mask head — and
+      refuses to round the box coordinates that tell it where to look.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Explain the two stages: region proposal network (RPN), then per-RoI box and mask heads.</li>
+        <li>Compute RoIPool and RoIAlign outputs on the same fractional region.</li>
+        <li>Derive RPN anchor targets and the per-pixel mask BCE loss.</li>
+        <li>Run inference with torchvision and read the box and mask tensor shapes.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        An object detector returns a list of boxes \((x_1,y_1,x_2,y_2)\). Mask R-CNN returns those
+        boxes <em>plus</em> a binary mask for each one. Because a mask is spatial, the operation that
+        extracts a fixed-size feature window must preserve sub-pixel alignment: rounding a box to
+        integers shifts the mask by exactly the pixels you cannot afford to lose.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: two stages, three losses</h2>
+
+    <p>
+      Stage one, the <strong>RPN</strong>, slides a small conv over the backbone feature map and
+      predicts, for each of \(k\) anchors per location, an objectness score and four box deltas.
+      Stage two takes the selected proposals, pools a fixed-size feature window from the shared
+      feature map with <strong>RoIAlign</strong>, and predicts a class, a refined box and a
+      \(28\times28\) mask. Training therefore optimises three losses at once:
+    </p>
+
+    \[ \mathcal{L}=\mathcal{L}_{\mathrm{rpn}}+\mathcal{L}_{\mathrm{box}}+\mathcal{L}_{\mathrm{mask}} \]
+
+    <p>
+      The mask branch is fully convolutional: it sees a \(14\times14\times256\) RoI feature and
+      produces one probability per class per output cell. Keeping masks class-specific (rather than
+      sharing one binary mask across classes) is what lets the mask head compete on accuracy.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Boxes tolerate a pixel of jitter; masks do not. RoIAlign exists because quantising a
+        proposal turns a half-pixel error into a visible boundary error.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="align">1 · RoIPool vs RoIAlign on a 4×4 grid</h3>
+
+    <p>
+      Take the feature grid below; a cell \((x,y)\) has its centre at \((x+0.5,y+0.5)\). The
+      fractional RoI is \((x_1,y_1,x_2,y_2)=(0.8,0.8,3.1,2.6)\) and the pooled output is \(2\times2\).
+    </p>
+
+    <table class="shape-table">
+      <caption>4×4 feature grid used in the worked RoI example</caption>
+      <thead><tr><th>y \ x</th><th>0</th><th>1</th><th>2</th><th>3</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>1</td><td>2</td><td>3</td><td>4</td></tr>
+        <tr><td>1</td><td>5</td><td>6</td><td>7</td><td>8</td></tr>
+        <tr><td>2</td><td>9</td><td>10</td><td>11</td><td>12</td></tr>
+        <tr><td>3</td><td>13</td><td>14</td><td>15</td><td>16</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      <strong>RoIPool</strong> rounds first: \(x_1'=\lfloor0.8\rfloor=0\),
+      \(y_1'=\lfloor0.8\rfloor=0\), \(x_2'=\lceil3.1\rceil=4\), \(y_2'=\lceil2.6\rceil=3\).
+      The integer region is \(4\times3\); split into \(2\times2\) bins gives columns {0,1} and {2,3},
+      rows {0,1} and {2}. Taking the max in each bin yields
+      \(\begin{bmatrix}6&amp;8\\10&amp;12\end{bmatrix}\).
+    </p>
+
+    <p>
+      <strong>RoIAlign</strong> never rounds. Bin width \(=(3.1-0.8)/2=1.15\), bin height
+      \(=(2.6-0.8)/2=0.9\), with two samples per bin at offsets \(0.25\) and \(0.75\).
+      For the top-left bin's first sample:
+      \(x=0.8+0.25\cdot1.15=1.0875\), \(y=0.8+0.25\cdot0.9=1.025\).
+      After the standard half-cell shift, \(s_x=x-0.5=0.5875\), \(s_y=y-0.5=0.525\), so the four
+      neighbours are \((0,0),(1,0),(0,1),(1,1)\) with bilinear weights
+    </p>
+
+    \[ w_{00}=(1-0.5875)(1-0.525)=0.19594,\quad
+       w_{10}=0.5875(1-0.525)=0.27906 \]
+    \[ w_{01}=(1-0.5875)(0.525)=0.21656,\quad
+       w_{11}=0.5875\cdot0.525=0.30844 \]
+
+    <p>
+      The sampled value is \(1w_{00}+2w_{10}+5w_{01}+6w_{11}
+      \approx0.19594+0.55813+1.08281+1.85063=3.6875\). Averaging the four samples in that bin and
+      repeating for the other bins gives the aligned output; the lab computes all four live.
+    </p>
+
+    <section class="lab" data-widget="m5-03-roi-align" data-badge="exact"
+             data-title="Draggable RoI: RoIPool vs RoIAlign"
+             data-note="Exact: pooled bins, bilinear sample locations and all output values are computed from the grid and the fractional RoI you drag.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="anchors">2 · RPN anchor targets</h3>
+
+    <p>
+      An anchor is a reference box with centre \((x_c,y_c)\), area \(s^2\) and aspect ratio \(r\):
+    </p>
+
+    \[ w = s\sqrt{r},\qquad h = s/\sqrt{r} \]
+
+    <p>
+      <strong>Worked example.</strong> At one location with \(s=16\) and \(r\in\{1:1,2:1,1:2\}\):
+      \(r=1\) gives \(w=h=16\); \(r=2\) gives \(w=16\sqrt2\approx22.6,\ h=16/\sqrt2\approx11.3\);
+      \(r=1/2\) swaps them. With three scales \(s\in\{8,16,32\}\) there are \(k=3\cdot3=9\)
+      anchors per location.
+    </p>
+
+    <p>
+      Targets come from IoU with the nearest ground-truth box. An anchor at the same centre as a
+      \(16\times16\) ground truth with \(s=16,r=1\) has area \(256\), intersection \(256\),
+      union \(256\) and \(\mathrm{IoU}=1\) — a <strong>positive</strong>. The \(s=32,r=1\) anchor
+      has area \(1024\), intersection \(256\), union \(1024\) and \(\mathrm{IoU}=0.25\) — a
+      <strong>negative</strong>. The usual rule is positive if \(\mathrm{IoU}>0.7\) (or the best
+      anchor for a ground truth), negative if \(<0.3\), ignored in between; roughly half of each
+      mini-batch is sampled as positives.
+    </p>
+
+    <h3 id="maskloss">3 · The mask loss is per pixel, per RoI</h3>
+
+    <p>
+      For a positive RoI, the mask head outputs logits \(\hat z_{c,i,j}\) for each class \(c\) and
+      cell \((i,j)\); the loss is the mean BCE over all \(K\) classes and cells:
+    </p>
+
+    \[ \mathcal{L}_{\mathrm{mask}}=\frac{1}{R}\sum_{r=1}^{R}\frac{1}{K}\sum_{c=1}^{K}\sum_{i,j}
+       \mathrm{BCE}\big(\sigma(\hat z^{(r)}_{c,i,j}),\,g^{(r)}_{c,i,j}\big) \]
+
+    <p>
+      \(R\) is the number of sampled positive RoIs and \(g\in\{0,1\}\) the resized ground-truth
+      mask cell.
+      <strong>Worked check.</strong> One class, four cells with probabilities
+      \(p=[0.9,0.8,0.2,0.1]\) and targets \(g=[1,1,0,0]\): the BCE terms are
+      \(-\log0.9=0.105\), \(-\log0.8=0.223\), \(-\log0.8=0.223\), \(-\log0.9=0.105\), so the
+      mean is \((0.105+0.223+0.223+0.105)/4\approx0.164\). Only class-specific targets contribute;
+      the box and classification losses are computed on the same RoIs but with different targets.
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      A torchvision Mask R-CNN with a two-class mask predictor. Weights are <em>not</em> downloaded:
+      this is a synthetic-image shape/inference check, and the printed box count depends on the
+      randomly initialised model.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torchvision.models.detection import maskrcnn_resnet50_fpn
+from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
+
+NUM_CLASSES = 2                      # background + one thing class
+
+# weights=None: no download, randomly initialised. The API shape is the same.
+model = maskrcnn_resnet50_fpn(weights=None, weights_backbone=None, num_classes=91)
+in_ch = model.roi_heads.mask_predictor.conv5_mask.in_channels
+model.roi_heads.mask_predictor = MaskRCNNPredictor(in_ch, 256, NUM_CLASSES)
+model.eval()                          # required: BN and the RPN behave differently in train mode
+
+image = torch.rand(3, 224, 224)       # synthetic (C,H,W) image, values in [0,1]
+with torch.no_grad():
+    preds = model([image])            # torchvision expects a LIST of images
+
+p = preds[0]
+print("boxes", tuple(p["boxes"].shape))   # (N_det, 4), x1 y1 x2 y2 in image pixels
+print("labels", tuple(p["labels"].shape)) # (N_det,)
+print("scores", tuple(p["scores"].shape)) # (N_det,)
+print("masks", tuple(p["masks"].shape))   # (N_det, 1, 28, 28), probabilities
+
+keep = p["scores"] &gt; 0.5                 # threshold at INFERENCE, not during training
+small_masks = p["masks"][keep]
+print("thresholded masks", tuple(small_masks.shape))  # (N_keep, 1, 28, 28)
+
+# If you resize the image, scale boxes the same way:
+scale = 224 / 448
+boxes_scaled = p["boxes"] * scale</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      torchvision returns masks on \([0,1]\) with shape \((N_{det},K_{classes},28,28)\). Threshold
+      them to obtain a binary mask; evaluate with COCO-style IoU averaged over IoU thresholds
+      0.50:0.95 (state the thresholds whenever you quote mAP).
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Resizing without adjusting boxes</p>
+        <p>
+          If the image is scaled by \(a\) but boxes are not, predictions land at the wrong
+          coordinates — the classic “masks offset by a few pixels” bug. Keep a single
+          resize/scale helper for images and targets.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">NMS in the wrong place</p>
+        <p>
+          Proposals are selected with NMS at inference; during training all sampled positives and
+          negatives are used. Applying an inference threshold to training targets starves the
+          mask head of examples.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Mask threshold too high</p>
+        <p>
+          A 0.9 threshold makes masks tiny and destroys IoU. Start near 0.5 and tune on validation
+          IoU; remember the head outputs probabilities, not hard labels.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting <code>model.eval()</code></p>
+        <p>
+          In train mode the RPN samples proposals differently and batch-norm uses batch statistics.
+          Inference on one image in train mode can fail outright or give unstable masks.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      Boxes look roughly right but every predicted mask sits a few pixels up and to the left of its
+      object. The mask head, RoIAlign and thresholds were all checked.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The image was resized after the boxes (or the boxes were resized with a different scale
+        factor / offset). RoIAlign then samples the correct feature window for the <em>wrong</em>
+        rectangle. Track the exact transform — scale and padding — and apply the identical map to
+        boxes before cropping. With letterboxing, subtract the padding offset as well as dividing
+        by the scale, and invert the transform before drawing predictions on the original image.
+      </p>
+      <p class="small muted">
+        Second suspect: visualising a \(28\times28\) mask at the full image size with nearest
+        resizing but ignoring the RoI's origin. Overlay masks using the predicted box coordinates.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m5-03">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — Mask R-CNN",
+        "questions": [
+          {
+            "q": "What does the RPN produce at each feature-map location?",
+            "options": [
+              "A full segmentation mask",
+              "Objectness scores and box deltas for k anchors",
+              "A class probability for the whole image",
+              "The final 28×28 mask logits"
+            ],
+            "correct": 1,
+            "why": [
+              "Masks come from the second stage's mask head.",
+              "Correct: the RPN scores k anchors and regresses four deltas for each.",
+              "That is a classifier, not the region proposal stage.",
+              "Mask logits are produced after RoIAlign."
+            ]
+          },
+          {
+            "q": "With three scales and three aspect ratios, how many anchors does each RPN location have?",
+            "options": ["3", "6", "9", "27"],
+            "correct": 2,
+            "why": [
+              "That is one scale's worth of ratios.",
+              "That would be two scales times three ratios.",
+              "Correct: k = 3 scales × 3 ratios = 9.",
+              "That would require three more scales."
+            ]
+          },
+          {
+            "q": "An anchor with area 1024 fully contains a 16×16 ground-truth box (area 256). What is their IoU?",
+            "options": ["1.0", "0.5", "0.25", "0.7"],
+            "correct": 2,
+            "why": [
+              "That requires equal areas.",
+              "That would need intersection 512.",
+              "Correct: intersection/union = 256/1024 = 0.25, normally a negative anchor.",
+              "That is close to the positive threshold, but not the computed value."
+            ]
+          },
+          {
+            "q": "RoIAlign differs from RoIPool mainly because it…",
+            "options": [
+              "Uses max instead of average pooling",
+              "Keeps fractional box coordinates and samples features with bilinear interpolation",
+              "Adds a new classification head",
+              "Replaces anchors with points"
+            ],
+            "correct": 1,
+            "why": [
+              "Both can use max or average over samples; the difference is quantisation.",
+              "Correct: no rounding of RoI bounds, and bilinear samples at regular offsets.",
+              "The heads are shared between both designs.",
+              "That describes anchor-free detectors."
+            ]
+          },
+          {
+            "q": "In the worked 4×4 grid, the RoIPool max in the top-left bin (rows 0–1, cols 0–1) is…",
+            "options": ["2", "5", "6", "8"],
+            "correct": 2,
+            "why": [
+              "That is one cell, not the bin maximum.",
+              "That is the bottom-left value of the bin.",
+              "Correct: max of {1,2,5,6} = 6.",
+              "That belongs to the top-right bin."
+            ]
+          },
+          {
+            "q": "What is the shape of one predicted mask in torchvision Mask R-CNN?",
+            "options": ["(1, 1, 28, 28)", "(N_det, K_classes, 28, 28)", "(N_det, 4)", "(N_det, 14, 14)"],
+            "correct": 1,
+            "why": [
+              "That omits the detection and class axes.",
+              "Correct: one 28×28 probability map per detected object per class.",
+              "That is the box output, not the mask.",
+              "14×14 is the RoI feature size before the mask head, not the output."
+            ]
+          },
+          {
+            "q": "Which statement about the mask loss is correct?",
+            "options": [
+              "It is a single BCE over the whole image",
+              "It is averaged over sampled positive RoIs and over classes and mask cells",
+              "It replaces the box loss",
+              "It uses softmax over the batch axis"
+            ],
+            "correct": 1,
+            "why": [
+              "The mask loss is per RoI, not one global image decision.",
+              "Correct: mean BCE over RoIs, classes and the K mask cells.",
+              "Box, classifier and mask losses are added together.",
+              "Softmax over batch would mix different images."
+            ]
+          },
+          {
+            "q": "Predicted masks are slightly offset from boxes on the original image. What do you check first?",
+            "options": [
+              "Raise the score threshold",
+              "Increase the number of anchors",
+              "Whether image and box resize transforms match exactly, including padding offsets",
+              "Switch from RoIAlign to RoIPool"
+            ],
+            "correct": 2,
+            "why": [
+              "A higher threshold shrinks detections; it does not correct a geometric shift.",
+              "Anchors affect proposals, not the alignment of a produced mask.",
+              "Correct: mismatched resize factors or letterbox padding shift every RoI.",
+              "RoIPool would quantise and make alignment worse."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · The RPN scores 9 anchors per location; the second head refines boxes, classifies and predicts a per-class mask.<br>
+        2 · RoIPool rounds a fractional box and loses half a cell; RoIAlign bilinearly samples 2×2 points in each of 2×2 bins — on the worked grid the first sample is 3.6875.<br>
+        3 · Mask BCE is averaged over positive RoIs, classes and cells; correct alignment and matched resize transforms matter more than thresholds.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m5-03">
+      <h2>Cheat sheet — M5·03</h2>
+      <ul>
+        <li>Two stages: RPN proposals → RoIAlign → box, class and mask heads.</li>
+        <li>Anchor: \(w=s\sqrt r,\ h=s/\sqrt r\); three scales × three ratios = 9.</li>
+        <li>Positive anchor: IoU &gt; 0.7 or best for a GT; negative: IoU &lt; 0.3.</li>
+        <li>RoIAlign: bin size \(=(x_2-x_1)/n\); 2×2 samples at offsets 0.25/0.75 with bilinear weights.</li>
+        <li>RoIPool quantises with floor/ceil; RoIAlign never rounds coordinates.</li>
+        <li>Torchvision output: boxes \((N_{det},4)\), masks \((N_{det},K,28,28)\); call <code>model.eval()</code>.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Girshick, R. — <em>Fast R-CNN</em> (2015).</li>
+      <li>Ren, S. — <em>Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks</em> (2015).</li>
+      <li>He, K. — <em>Mask R-CNN</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m5-02-unet-and-dice.html">← U-Net, Dice and IoU</a>
+      <a href="m5-04-kaggle-playbook.html">Next: Kaggle playbook →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M5 Segmentation &amp; Kaggle</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m5-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

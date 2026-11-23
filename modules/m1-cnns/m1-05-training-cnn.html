@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training a CNN end to end · DeepLearn Lab</title>
+<meta name="description" content="BatchNorm, weight decay, augmentation, warmup plus cosine schedules and a complete CIFAR-style training loop with annotated shapes.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m1" data-lesson="m1-05" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="index.html" aria-current="page">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 1 · CNNs</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M1 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m1-05">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M1 CNNs</a> / <span>Training a CNN</span>
+    </nav>
+
+    <h1>Training a CNN end to end</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 5 of 8 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">Training a CNN is your sklearn pipeline rebuilt from layers and schedules: normalisation becomes BatchNorm, regularisation becomes architecture plus optimizer, and the learning rate becomes a function of step.</p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+          <li>Compute BatchNorm forward on a small batch and explain train versus eval behaviour.</li>
+          <li>Distinguish L1 and L2 regularisation geometrically and in the gradient.</li>
+          <li>Write a warmup-plus-cosine learning-rate schedule and evaluate it at a given step.</li>
+          <li>Assemble a complete CIFAR-style CNN loop with labelled shapes, augmentation and a head.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>Your sklearn pipeline had StandardScaler, GridSearchCV and a fixed optimizer. In deep learning normalisation is a layer with learnable scale and shift; regularisation is a mix of weight decay, dropout, augmentation and schedule — and batch statistics make train and eval genuinely different modes.</p>
+    </aside>
+
+    <h2 id="intuition">Intuition: normalisation as a layer</h2>
+
+    <p>
+      BatchNorm standardises each channel across the batch and the spatial positions, then applies
+      a learnable scale \(\gamma\) and shift \(\beta\). It lets deeper layers see activations on a
+      consistent scale, and its running statistics make evaluation deterministic. Regularisation
+      is no longer one term: L2 decay pulls weights toward zero, dropout randomly removes
+      activations in training, augmentation changes the inputs, and the LR schedule controls how
+      aggressively the model can fit.
+    </p>
+    <p>
+      The training loop itself is unchanged from M0: forward, loss, backward, optimizer step.
+      What is new is bookkeeping — calling <code>model.train()</code> and <code>model.eval()</code>,
+      putting augmentation only on the training path, and choosing whether the LR is warm, decayed,
+      or both.
+    </p>
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols</p>
+      <p>\(\mu_B,\sigma_B^2\): batch mean/variance · \(\epsilon\): numerical stabiliser ·
+      \(\gamma,\beta\): learned affine parameters · \(\lambda\): L2/weight-decay strength ·
+      \(\eta_t\): learning rate at step \(t\) · \(T\): total steps · \(\epsilon_{ls}\): label-smoothing amount ·
+      \(\theta\): parameters.</p>
+    </div>
+    
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="bn">1 · BatchNorm</h3>
+    \[ \hat x = \frac{x-\mu_B}{\sqrt{\sigma_B^2+\epsilon}}, \qquad y = \gamma \hat x + \beta \]
+    <p>
+      Worked on four numbers \(x=(1,2,3,4)\), with \(\epsilon=10^{-5}\), \(\gamma=2\), \(\beta=0.5\):
+      \(\mu_B=2.5\), \(\sigma_B^2=\frac{2.25+0.25+0.25+2.25}{4}=1.25\),
+      \(\sqrt{1.25+10^{-5}}\approx1.11803\). The normalised values are
+      \((-1.3416,-0.4472,0.4472,1.3416)\) and after the affine transform
+      \(y\approx(-2.1833,-0.3944,1.3944,3.1833)\). At eval time \(\mu_B,\sigma_B^2\) are replaced
+      by running averages accumulated during training.
+    </p>
+
+    <h3 id="l2">2 · L2 penalty</h3>
+    \[ \mathcal{L}_{\text{total}} = \mathcal{L} + \frac{\lambda}{2}\lVert\theta\rVert^2,
+       \qquad \nabla_\theta \mathcal{L}_{\text{total}} = \nabla_\theta\mathcal{L} + \lambda\theta \]
+    <p>
+      Worked: with \(\theta=0.8\), \(\lambda=0.01\), the extra gradient is \(0.008\) — a small pull
+      toward zero every step. L1 instead adds \(\lambda\,\mathrm{sign}(\theta)\), which can set
+      weights exactly to zero. In most CNN code “weight decay” in AdamW implements decoupled L2.
+    </p>
+
+    <h3 id="schedule">3 · Warmup + cosine</h3>
+    \[ \eta_t = \eta_{\min} + \tfrac12(\eta_{\max}-\eta_{\min})\left(1+\cos\frac{\pi t}{T}\right) \]
+    <p>
+      Worked with \(\eta_{\max}=0.1\), \(\eta_{\min}=10^{-4}\), \(t=50\), \(T=100\):
+      \(\cos(\pi/2)=0\), so \(\eta_{50}=0.0001+0.5\cdot0.0999\cdot1=\mathbf{0.05005}\).
+      Warmup linearly raises \(\eta\) from near zero to \(\eta_{\max}\) over the first
+      \(t_w\) steps, which keeps early updates from destabilising a randomly initialised net.
+    </p>
+
+    <h3 id="labelsmooth">4 · Label smoothing and clipping</h3>
+    \[ y'_k = \begin{cases}1-\epsilon_{ls} &amp; k=y\\ \epsilon_{ls}/(K-1) &amp; k\ne y\end{cases} \]
+    <p>
+      Worked with \(K=10\), \(\epsilon_{ls}=0.1\): the true class target is \(0.9\), each of the
+      other nine classes gets \(0.1/9\approx0.0111\). This prevents the model from pushing logits
+      to infinity. Gradient clipping rescales a gradient \(g\) by \(\min(1,\tau/\lVert g\rVert)\);
+      with \(\lVert g\rVert=5,\tau=1\) the gradient is multiplied by \(0.2\).
+    </p>
+    
+
+    <h2 id="lab">Hands-on labs</h2>
+    <p class="small muted">Every number below is computed in your browser from the inputs you can change.</p>
+<section class="lab" data-widget="m1-05-bn-histogram" data-badge="exact"
+         data-title="BatchNorm before and after"
+         data-note="Exact: mean, variance, normalisation and affine transform are recomputed from the displayed batch.">
+  <div class="lab__body"></div>
+</section>
+
+<section class="lab" data-widget="m1-05-reg-geometry" data-badge="exact"
+         data-title="L1 versus L2 constraint geometry"
+         data-note="Exact: contours, constraint sets and the ridge optimum are computed from lambda on a 2-D grid.">
+  <div class="lab__body"></div>
+</section>
+
+<section class="lab" data-widget="m1-05-lr-schedule-plotter" data-badge="exact"
+         data-title="Learning-rate schedules"
+         data-note="Exact: each curve is evaluated step by step and the integrated LR area uses the trapezoid rule.">
+  <div class="lab__body"></div>
+</section>
+
+<section class="lab" data-widget="m1-05-optimizer-surfaces" data-badge="exact"
+         data-title="Optimizer race on a ravine"
+         data-note="Exact: gradients and optimizer states come from DL.nn.opt; the loop is time-sliced by DL.trainer with Pause/Reset/Speed.">
+  <div class="lab__body"></div>
+</section>
+
+    <h2 id="code">Code</h2>
+<div class="tabs" data-tabs>
+  <div class="tabs__list" role="tablist">
+    <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+    <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+  </div>
+  <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+import torchvision.transforms as T
+
+# CIFAR-10 path (commented: no downloads in this offline course):
+# train = torchvision.datasets.CIFAR10(root="./data", train=True, download=True,
+#                                      transform=T.Compose([T.RandomCrop(32, 4),
+#                                                           T.RandomHorizontalFlip(),
+#                                                           T.ToTensor(),
+#                                                           T.Normalize((.5,)*3, (.5,)*3)]))
+# Synthetic stand-in with the identical shapes — clearly NOT real CIFAR data:
+X = torch.randn(512, 3, 32, 32)             # (N, C, H, W)
+y = torch.randint(0, 10, (512,))            # (N,)
+train = TensorDataset(X, y)
+loader = DataLoader(train, batch_size=64, shuffle=True)
+
+def conv(cin, cout):
+    return nn.Sequential(nn.Conv2d(cin, cout, 3, padding=1, bias=False),  # (N,cout,H,W)
+                         nn.BatchNorm2d(cout), nn.ReLU())
+
+net = nn.Sequential(conv(3, 32), nn.MaxPool2d(2),      # (N,32,16,16)
+                    conv(32, 64), nn.MaxPool2d(2),     # (N,64,8,8)
+                    nn.AdaptiveAvgPool2d(1), nn.Flatten(),  # (N,64)
+                    nn.Dropout(0.2), nn.Linear(64, 10))     # (N,10) logits
+
+opt = torch.optim.AdamW(net.parameters(), lr=1e-3, weight_decay=1e-4)
+steps = 200
+for step in range(steps):
+    warm = min(1.0, (step + 1) / 20)                    # linear warmup
+    cos = 0.5 * (1 + torch.cos(torch.tensor(3.14159265 * step / steps)).item())
+    for group in opt.param_groups:
+        group["lr"] = 1e-3 * warm * cos                  # warmup + cosine
+    xb, yb = next(iter(loader))                          # (64,3,32,32), (64,)
+    logits = net(xb)                                     # (64,10)
+    loss = nn.functional.cross_entropy(logits, yb, label_smoothing=0.1)
+    opt.zero_grad(set_to_none=True)
+    loss.backward()
+    nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+    opt.step()
+    if step % 40 == 0:
+        print(step, round(loss.item(), 4), round(opt.param_groups[0]["lr"], 6))
+
+# model.train() during the loop; model.eval() + torch.no_grad() for validation.
+# AMP: with torch.autocast("cuda", dtype=torch.float16): logits = net(xb)</code></pre>
+  </div>
+  <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+
+# Keras uses NHWC: (N, H, W, C). PyTorch listing above uses NCHW.
+# Real CIFAR-10: tf.keras.datasets.cifar10.load_data() — omitted offline.
+tf.random.set_seed(0)
+X = tf.random.normal((512, 32, 32, 3))       # NCHW equivalent (512,3,32,32)
+y = tf.random.uniform((512,), 0, 10, dtype=tf.int32)
+
+augment = tf.keras.Sequential([
+    tf.keras.layers.RandomCrop(32, 4),
+    tf.keras.layers.RandomFlip("horizontal"),
+])
+
+def conv(c):
+    return tf.keras.Sequential([
+        tf.keras.layers.Conv2D(c, 3, padding="same", use_bias=False),  # (N,H,W,c)
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU(),
+    ])
+
+inputs = tf.keras.Input((32, 32, 3))
+x = augment(inputs)                          # training path only
+x = conv(32)(x); x = tf.keras.layers.MaxPooling2D(2)(x)      # (N,16,16,32)
+x = conv(64)(x); x = tf.keras.layers.MaxPooling2D(2)(x)      # (N,8,8,64)
+x = tf.keras.layers.GlobalAveragePooling2D()(x)              # (N,64)
+x = tf.keras.layers.Dropout(0.2)(x)
+outputs = tf.keras.layers.Dense(10)(x)                       # (N,10) logits
+
+model = tf.keras.Model(inputs, outputs)
+warm = tf.keras.optimizers.schedules.LearningRateSchedule()
+class WarmCosine(warm):
+    def __init__(self, hi=1e-3, warm_steps=20, total=200):
+        super().__init__(); self.hi, self.w, self.T = hi, warm_steps, total
+    def __call__(self, step):
+        w = tf.minimum(1.0, (step + 1) / self.w)
+        c = 0.5 * (1 + tf.cos(3.14159265 * step / self.T))
+        return self.hi * w * c
+    def get_config(self): return {}
+
+model.compile(optimizer=tf.keras.optimizers.AdamW(WarmCosine(), weight_decay=1e-4),
+              loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True,
+                                                                 label_smoothing=0.1),
+              metrics=["accuracy"])
+model.fit(X, y, batch_size=64, epochs=2, verbose=0)</code></pre>
+  </div>
+</div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">BN with batch size 1</p>
+        <p>Batch statistics over one sample and a tiny spatial map are noisy or undefined. Use GroupNorm or frozen BatchNorm for tiny batches.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting model.eval()</p>
+        <p>In eval mode BN uses running statistics and dropout is off. Leaving the model in train mode makes validation outputs depend on batch composition.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Decaying BN parameters</p>
+        <p>Weight decay on gamma/beta and biases is usually skipped; most implementations separate those parameter groups.</p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Augmenting validation data</p>
+        <p>Random crops and flips belong on the training path only. Applying them at validation time changes the task and makes scores noisy.</p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+    <p>
+      A reader reports: training loss falls to nearly zero, but validation accuracy stays near
+      10% on a balanced 10-class task. One line is wrong.
+    </p>
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The labels and loss disagree. Common examples: targets are one-hot of shape \((N,10)\)
+        while <code>CrossEntropyLoss</code> expects class indices \((N,)\); or logits are passed
+        through softmax before a loss that applies log-softmax itself. Print
+        <code>yb.shape, yb.dtype, logits.shape</code> and pass raw logits to the fused loss.
+      </p>
+      <p class="small muted">Second check: if validation was run without
+      <code>model.eval()</code>, BN's batch statistics make the score unstable — but that would
+      not pin accuracy exactly at chance.</p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+    <section class="quiz" data-quiz="m1-05">
+      <script type="application/json" class="quiz__data">
+{
+  "title": "Check yourself — Training a CNN",
+  "questions": [
+    {
+      "q": "BatchNorm on x=(1,2,3,4) with epsilon≈0 has batch mean:",
+      "options": [
+        "1.5",
+        "2",
+        "2.5",
+        "3"
+      ],
+      "correct": 2,
+      "why": [
+        "Too low.",
+        "That is the median.",
+        "Correct: (1+2+3+4)/4 = 2.5.",
+        "Too high."
+      ]
+    },
+    {
+      "q": "With lambda=0.01 and theta=0.8, the L2 gradient contribution is:",
+      "options": [
+        "0.008",
+        "0.08",
+        "0.8",
+        "0.0008"
+      ],
+      "correct": 0,
+      "why": [
+        "Correct: lambda·theta = 0.01·0.8.",
+        "That is lambda·8.",
+        "That is theta itself.",
+        "That is lambda²·theta."
+      ]
+    },
+    {
+      "q": "Cosine schedule with eta_max=0.1, eta_min=1e-4 at t=T/2 gives:",
+      "options": [
+        "0.1",
+        "0.05005",
+        "0.0001",
+        "0.055"
+      ],
+      "correct": 1,
+      "why": [
+        "That is eta_max at t=0.",
+        "Correct: 1e-4 + 0.5·0.0999·(1+cos(pi/2)) = 0.05005.",
+        "That is eta_min at t=T.",
+        "Arithmetic slip."
+      ]
+    },
+    {
+      "q": "Label smoothing eps=0.1 with K=10 assigns the non-true classes:",
+      "options": [
+        "0.1 each",
+        "0.9 each",
+        "0.1/9 each",
+        "0 each"
+      ],
+      "correct": 2,
+      "why": [
+        "That would sum to 0.9 over nine classes.",
+        "That is the true-class target.",
+        "Correct: 0.1/9 ≈ 0.0111.",
+        "That is no smoothing."
+      ]
+    },
+    {
+      "q": "At evaluation time BatchNorm uses:",
+      "options": [
+        "Current batch statistics",
+        "Running statistics accumulated in training",
+        "Zero mean and unit variance always",
+        "Dropout masks"
+      ],
+      "correct": 1,
+      "why": [
+        "That is train mode.",
+        "Correct: running estimates make eval deterministic.",
+        "Only if running stats are untrained.",
+        "Dropout is disabled at eval."
+      ]
+    },
+    {
+      "q": "Why warm up the learning rate?",
+      "options": [
+        "To increase final accuracy without other changes",
+        "To avoid huge early updates before features stabilise",
+        "To double the batch size",
+        "To remove the need for a loss"
+      ],
+      "correct": 1,
+      "why": [
+        "It mainly improves stability, not a guaranteed accuracy jump.",
+        "Correct: early gradients can be large with random weights.",
+        "Unrelated to batch size.",
+        "A loss is always needed."
+      ]
+    },
+    {
+      "q": "Gradient clipping with norm 5 and threshold tau=1 multiplies the gradient by:",
+      "options": [
+        "5",
+        "1",
+        "0.2",
+        "0"
+      ],
+      "correct": 2,
+      "why": [
+        "That is the original norm.",
+        "No clipping would do that.",
+        "Correct: min(1, 1/5) = 0.2.",
+        "Clipping does not zero the gradient."
+      ]
+    },
+    {
+      "q": "Which of these belongs on the validation path?",
+      "options": [
+        "RandomHorizontalFlip",
+        "RandomCrop",
+        "model.eval()",
+        "Color jitter"
+      ],
+      "correct": 2,
+      "why": [
+        "Random flips change the label-aligned image.",
+        "Random crops are a training augmentation.",
+        "Correct: evaluation mode fixes BN and dropout.",
+        "Jitter is a training augmentation."
+      ]
+    }
+  ]
+}
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+    <div class="keyidea">
+      <p>
+1 · BatchNorm normalises with batch statistics in training and running statistics at eval; the worked batch (1,2,3,4) has mean 2.5 and variance 1.25.<br>
+2 · Weight decay adds lambda·theta to the gradient, and warmup+cosine sets eta_t = eta_min + ½(eta_max−eta_min)(1+cos(pi t/T)) — 0.05005 at the midpoint of the worked schedule.<br>
+3 · A CNN loop is forward → fused loss (with label smoothing) → clip → optimizer step, wrapped in train/eval modes and training-only augmentation.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m1-05">
+      <h2>Cheat sheet — M1·05</h2>
+      <ul>
+          <li>BatchNorm: \(\hat x=(x-\mu_B)/\sqrt{\sigma_B^2+\epsilon}\), \(y=\gamma\hat x+\beta\).</li>
+          <li>Worked: \(\mu_B=2.5,\ \sigma_B^2=1.25,\ \hat x\approx(-1.34,-0.45,0.45,1.34)\).</li>
+          <li>L2 gradient: \(\nabla\mathcal{L}+\lambda\theta\); \(\lambda=0.01,\theta=0.8\Rightarrow0.008\).</li>
+          <li>Warmup+cosine midpoint: \(\eta=0.05005\) for (0.1, 1e-4, T=100).</li>
+          <li>Label smoothing: \(0.9\) true class, \(0.1/9\) each other class for K=10.</li>
+          <li>Call model.train() / model.eval(); clip by min(1, tau/||g||).</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+        <li>Ioffe, S. — <em>Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift</em> (2015).</li>
+        <li>Loshchilov, I. — <em>SGDR: Stochastic Gradient Descent with Warm Restarts</em> (2016).</li>
+        <li>Srivastava, N. — <em>Dropout: A Simple Way to Prevent Neural Networks from Overfitting</em> (2014).</li>
+        <li>Loshchilov, I. — <em>Decoupled Weight Decay Regularization</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m1-04-architectures.html">← Previous: Architectures</a>
+      <a href="m1-06-tuning-and-augmentation.html">Next: Tuning & augmentation →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M1 CNNs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m1-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

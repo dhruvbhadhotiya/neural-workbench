@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training and evaluating GANs · DeepLearn Lab</title>
+<meta name="description" content="Diagnose mode collapse and loss tug-of-war, compute a 2-D Fréchet distance, and use IS, FID and precision/recall without the usual traps.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m3" data-lesson="m3-02" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="index.html" aria-current="page">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 3 · Generative models</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M3 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m3-02">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M3 GANs</a> / <span>Training &amp; evaluating</span>
+    </nav>
+
+    <h1>Training and evaluating GANs</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 2 of 4 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Loss curves lie. This lesson gives you the diagnostics that tell a healthy game from a
+      collapsed one, and the distribution-level metrics that judge the samples rather than the loss.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Recognise mode collapse and an unbalanced loss tug-of-war from readouts and plots.</li>
+        <li>Compute a 2-D Fréchet distance from means and covariances, and state what image FID changes.</li>
+        <li>Explain what IS measures, why it can be fooled, and how precision and recall cover different failures.</li>
+        <li>Choose diagnostics (D accuracy, gradient norms, EMA, TTUR) that actually guide a fix.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        In supervised ML, a held-out accuracy number tells you if training worked. For a GAN there
+        are no labels, and the generator's loss can improve while its samples get worse. Evaluation
+        moves from “is this prediction right?” to “does this cloud of samples match that cloud?”
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: what goes wrong, and what to look at</h2>
+
+    <p>
+      A GAN has two failure modes that look nothing like a supervised training curve. In
+      <strong>mode collapse</strong>, the generator finds a few outputs that reliably fool \(D\)
+      and puts all its probability mass there: samples look sharp but cover almost none of the
+      data. In an <strong>unbalanced game</strong>, one network wins: \(D\) at 100% accuracy gives
+      \(G\) no gradient, while a weak \(D\) gives \(G\) a useless signal.
+    </p>
+
+    <p>
+      The next two labs are <em>illustrative</em>: they are schematic traces that show the shape of
+      these failures, not trained networks. The third lab is <em>exact</em>: it computes a Fréchet
+      distance from the numbers you set.
+    </p>
+
+    <section class="lab" data-widget="m3-02-mode-collapse" data-badge="illustrative"
+             data-title="Mode collapse on a ring of eight modes"
+             data-note="Illustrative: a hand-tuned trace of cluster weights that mimics a collapsing generator; the slider scrubs a schematic, not a trained model.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Scrub the slider from step 0 to 100. The target is a ring of eight equally likely Gaussian
+      modes. As the trace advances, weight drains from most modes into one or two — the classic
+      signature. A single beautiful sample grid cannot reveal this; you need many samples and a
+      coverage statistic.
+    </p>
+
+    <section class="lab" data-widget="m3-02-loss-tugofwar" data-badge="illustrative"
+             data-title="Loss tug-of-war regimes"
+             data-note="Illustrative: analytic reference curves that show the three qualitative regimes; they are drawn from formulas, not measured from training.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Switch regimes and compare. A healthy game oscillates around the same level for both players.
+      When \(D\) wins, its loss falls toward zero and \(G\)'s grows without bound. When \(G\) wins,
+      the mirror image happens. Neither extreme means “better training”; both mean the game has
+      stopped being informative.
+    </p>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="is">1 · Inception Score</h3>
+
+    \[
+      \mathrm{IS}=\exp\Bigl(\mathbb{E}_{\mathbf{x}\sim p_g}
+      \bigl[D_{\mathrm{KL}}\bigl(p(y\mid\mathbf{x})\Vert \bar p(y)\bigr)\bigr]\Bigr),
+      \qquad \bar p(y)=\mathbb{E}_{\mathbf{x}\sim p_g}p(y\mid\mathbf{x})
+    \]
+
+    <p>
+      A pretrained image classifier supplies \(p(y\mid\mathbf{x})\), the class distribution of one
+      generated image: a sharp prediction means the image looks like a clear object. The marginal
+      \(\bar p(y)\) averages those predictions over the whole generated set: a diverse set has a
+      spread-out \(\bar p(y)\). Large KL between the two means “sharp images with varied classes”.
+      \(D_{\mathrm{KL}}(p\Vert q)=\sum_i p_i\log(p_i/q_i)\); entropy \(H(p)=-\sum_i p_i\log p_i\)
+      makes the worked example short.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> An ImageNet-style classifier gives three samples
+      \(p_1=(0.1,0.9)\), \(p_2=(0.8,0.2)\), \(p_3=(0.4,0.6)\).
+    </p>
+
+    \[
+      H(p_1)=0.32508,\quad H(p_2)=0.50040,\quad H(p_3)=0.67301
+      \;\Rightarrow\; \mathbb{E}H(p_i)=0.49950
+    \]
+    \[
+      \bar p=\tfrac13(p_1+p_2+p_3)=(0.4333,0.5667),\qquad H(\bar p)=0.68423
+    \]
+    \[
+      \mathbb{E}D_{\mathrm{KL}}=H(\bar p)-\mathbb{E}H(p_i)=0.68423-0.49950=0.18473,
+      \qquad \mathrm{IS}=e^{0.18473}=1.20290
+    \]
+
+    <p>
+      Why is IS flawed? It uses a fixed classifier (usually ImageNet-trained), so it rewards
+      images that look like its classes rather than images like the target data; it ignores real
+      data entirely; and it collapses to a low value if every generated image gets the same label,
+      even when the images are otherwise diverse. It also needs many samples for a stable marginal.
+    </p>
+
+    <h3 id="fid">2 · Fréchet Inception Distance</h3>
+
+    \[
+      \mathrm{FID}=\lVert\mu_r-\mu_g\rVert^2+
+      \mathrm{Tr}\bigl(\Sigma_r+\Sigma_g-2(\Sigma_r\Sigma_g)^{1/2}\bigr)
+    \]
+
+    <p>
+      \(\mu_r,\Sigma_r\) are the mean and covariance of <em>real</em> images in a feature space, and
+      \(\mu_g,\Sigma_g\) those of <em>generated</em> images in the same space. For image FID the
+      feature space is the penultimate activations of an Inception network; lower is better, and
+      identical Gaussian clouds give FID = 0. The formula is stated, not derived; the lab computes
+      it exactly for 2-D clouds you control.
+    </p>
+
+    <p>
+      <strong>Worked example (2-D, diagonal covariances).</strong> Let
+      \(\mu_r=(1,2)\), \(\mu_g=(1.5,2.5)\), \(\Sigma_r=I_2\),
+      \(\Sigma_g=\mathrm{diag}(4,1)\). Then
+    </p>
+
+    \[
+      \lVert\mu_r-\mu_g\rVert^2=(1.5-1)^2+(2.5-2)^2=0.25+0.25=0.50
+    \]
+    \[
+      (\Sigma_r\Sigma_g)^{1/2}=\mathrm{diag}(2,1)
+    \]
+    \[
+      \mathrm{Tr}(\Sigma_r+\Sigma_g-2(\Sigma_r\Sigma_g)^{1/2})
+      =(1+4-2\cdot2)+(1+1-2\cdot1)=1+0=1
+    \]
+    \[
+      \mathrm{FID}=0.50+1=1.50
+    \]
+
+    <p>
+      FID depends on the feature extractor, the image preprocessing, the sample count and the
+      crop/resize pipeline. Never compare two numbers computed with different settings.
+    </p>
+
+    <section class="lab" data-widget="m3-02-fid-slider" data-badge="exact"
+             data-title="Compute a 2-D Fréchet distance"
+             data-note="Exact: the general 2-D Fréchet distance is computed from the means and covariance matrices you set, using a closed-form 2x2 matrix square root. Image FID instead uses Inception features.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="pr">3 · Precision and recall for distributions</h3>
+
+    <p>
+      Borrow the words from classification but apply them to <em>modes</em>. Precision asks: of the
+      generated samples, how many look like something in the data? Recall asks: of the data modes,
+      how many are represented by generated samples? These are different failure axes. A generator
+      producing one perfect-looking mode has high precision and low recall; one spraying samples
+      over the whole space has high recall and low precision.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Suppose the data has 8 modes and your generator covers 5 of
+      them: recall \(=5/8=0.625\). Of 10 sampled clusters, 7 fall within the tolerance of a real
+      mode: precision \(=7/10=0.70\). A single FID number cannot tell you which of the two errors
+      occurred.
+    </p>
+
+    <h3 id="balance">4 · Diagnostics that guide a fix</h3>
+
+    <p>
+      Track discriminator accuracy on a balanced real/fake batch: it should hover near 50%, not
+      race to 100% by step 10. Track gradient norms of both networks: a norm collapsing to zero
+      means that player has stopped learning. Two common remedies are <strong>TTUR</strong> (the
+      two-timescale update rule), which uses a larger \(\eta_D\) than \(\eta_G\), and an
+      <strong>exponential moving average (EMA)</strong> of the generator weights for evaluation,
+      which smooths the samples without changing the game. None of these replace looking at many
+      samples from several checkpoints.
+    </p>
+
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <p>
+        \(p_g\) generated distribution · \(p(y\mid\mathbf{x})\) classifier's class distribution for
+        a generated image · \(\bar p(y)\) average prediction over generated images ·
+        \(D_{\mathrm{KL}}\) Kullback–Leibler divergence · \(H\) entropy in nats · \(\mu_r,\mu_g\)
+        real and generated feature means · \(\Sigma_r,\Sigma_g\) feature covariances ·
+        \(\mathrm{Tr}\) matrix trace · \(N\) number of samples · \(\eta_D,\eta_G\) discriminator
+        and generator learning rates.
+      </p>
+    </div>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      A diagnostic loop that logs the numbers discussed above, plus an offline, dependency-free
+      FID calculation on 2-D features. The <code>torchmetrics</code> line is shown as architecture
+      only: it fetches an Inception model when first used, so it is not part of this offline lesson.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import math
+import torch
+
+def fid_2d(real, fake):
+    """FID on a (N, 2) feature batch. No downloads; formula from the lesson."""
+    mr, mf = real.mean(0), fake.mean(0)
+    sr = torch.cov(real.T)
+    sf = torch.cov(fake.T)
+    delta = float(((mr - mf) ** 2).sum())
+    # sqrtm needs a complex view for numerical stability in older torch builds
+    root, _ = torch.linalg.sqrtm((sr @ sf).to(torch.complex64))
+    trace = float(torch.trace(sr + sf - 2 * root.real))
+    return delta + trace
+
+def diagnostics(G, D, z, x_real, step):
+    with torch.no_grad():
+        fake = G(z)                          # (N, 1) in the toy setting
+        acc_real = (D(x_real) &gt; 0).float().mean()
+        acc_fake = (D(fake) &lt;= 0).float().mean()
+        d_acc = 0.5 * float(acc_real + acc_fake)
+        sample_std = float(fake.std())
+    G.zero_grad(set_to_none=True)            # gradients accumulate in PyTorch
+    g = D(fake).mean()
+    g.backward()                             # inspect G's gradient norm after D's backward
+    last_weight = G[-1].weight               # final Linear in nn.Sequential
+    gnorm = last_weight.grad.norm().item() if last_weight.grad is not None else 0.0
+    if step % 100 == 0:
+        print(step, "D acc", round(d_acc, 3), "grad", round(gnorm, 5),
+              "sample std", round(sample_std, 3))
+    return d_acc, gnorm
+
+# Worked check of the formula with the numbers from the lesson:
+r = torch.tensor([[1., 2.]]) + torch.randn(20000, 2)
+f = torch.tensor([[1.5, 2.5]]) + torch.randn(20000, 2) * torch.tensor([2., 1.])
+print("fid_2d ~", round(fid_2d(r, f), 3))     # near 1.50, sampling noise aside
+
+# Architecture only (downloads weights on first use - not executed here):
+# from torchmetrics.image.fid import FrechetInceptionDistance
+# fid = FrechetInceptionDistance(feature=64)
+# fid.update(real_images, real=True); fid.update(fake_images, real=False)
+# print(fid.compute().item())
+</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      The printed FID is a sample estimate: with finite batches it fluctuates around the population
+      value 1.50. Reporting FID with too few samples produces a biased, optimistic number.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Comparing FID across preprocessing</p>
+        <p>
+          FID from differently cropped, resized or normalised images is not the same metric.
+          Compare only numbers produced by one feature extractor and one pipeline.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Too few samples</p>
+        <p>
+          A covariance estimated from a small batch is noisy and biased. Use tens of thousands of
+          samples when you can, and report the count with the number.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">IS with the wrong classifier</p>
+        <p>
+          IS with a non-ImageNet model measures that model's favourite classes, not quality on your
+          data. For medical or satellite images the Inception class prior is meaningless.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Judging by one sample grid</p>
+        <p>
+          A pretty grid can be one lucky mode. Look at many samples across checkpoints, plus a
+          coverage statistic, before declaring collapse fixed.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “my discriminator accuracy hits 100% at step 10 and stays there, and the
+      generator loss keeps climbing.” What should they check first?
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The discriminator is far too strong for the generator at this point. With perfect
+        separation, \(D(G(\mathbf z))\approx 0\) and the non-saturating gradient is nearly zero:
+        there is nothing left to learn from. Slow \(D\) down (smaller \(\eta_D\), or fewer \(D\)
+        steps per \(G\) step), consider TTUR with \(\eta_D\) and \(\eta_G\) tuned separately, add
+        label smoothing or instance noise, and watch the accuracy return toward 50%.
+      </p>
+      <p class="small muted">
+        Also check that real and fake batches have the same preprocessing: a trivially separable
+        scaling or colour difference lets \(D\) win without learning anything about content.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m3-02">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — training and evaluating GANs",
+        "questions": [
+          {
+            "q": "What is the signature of mode collapse?",
+            "options": [
+              "Generated samples are extremely noisy",
+              "The generator uses only a few of the data's modes",
+              "The discriminator loss falls to zero",
+              "The latent vector has too many dimensions"
+            ],
+            "correct": 1,
+            "why": [
+              "Noisy samples suggest undertraining, not collapse.",
+              "Correct: mass concentrates on a few modes while the rest are ignored.",
+              "That is a discriminator-win regime, a different failure.",
+              "Latent size alone does not determine coverage."
+            ]
+          },
+          {
+            "q": "Which quantity does FID compare between real and generated sets?",
+            "options": [
+              "Pixel-wise mean squared error",
+              "Mean and covariance of features in the same space",
+              "Classifier accuracy on real labels",
+              "The generator's loss value"
+            ],
+            "correct": 1,
+            "why": [
+              "FID does not compare images pixel by pixel.",
+              "Correct: it is the Fréchet distance between two Gaussian fits in feature space.",
+              "No real labels are used.",
+              "The loss is not a distribution-level metric."
+            ]
+          },
+          {
+            "q": "For mu_r = (1,2), mu_g = (1.5,2.5), Sigma_r = I and Sigma_g = diag(4,1), what is the 2-D FID?",
+            "options": ["0.50", "1.00", "1.50", "4.50"],
+            "correct": 2,
+            "why": [
+              "That is only the squared mean difference.",
+              "That is only the covariance trace term.",
+              "Correct: 0.50 + 1 = 1.50.",
+              "That adds the matrices without the square-root term."
+            ]
+          },
+          {
+            "q": "Why can Inception Score be misleading?",
+            "options": [
+              "It uses a fixed classifier and ignores the real data distribution",
+              "It requires a discriminator at evaluation time",
+              "It is always zero for image GANs",
+              "It measures only image resolution"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: it rewards the classifier's classes, not agreement with your data.",
+              "IS uses only a classifier, not D.",
+              "IS is normally positive.",
+              "Resolution does not enter the formula."
+            ]
+          },
+          {
+            "q": "A generator produces one gorgeous, realistic-looking mode out of eight data modes. Which statement fits?",
+            "options": [
+              "High precision, low recall",
+              "Low precision, high recall",
+              "High precision, high recall",
+              "Both precision and recall are undefined"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: samples look real (precision) but coverage is poor (recall).",
+              "That describes a generator spraying samples everywhere without matching any mode.",
+              "Coverage is only 1/8, so recall cannot be high.",
+              "Both can be estimated from samples and modes."
+            ]
+          },
+          {
+            "q": "Discriminator accuracy is 100% by step 10. What is the most likely problem?",
+            "options": [
+              "G has too many parameters",
+              "D is too strong, leaving G almost no gradient",
+              "The latent prior should be uniform",
+              "FID should be computed on fewer samples"
+            ],
+            "correct": 1,
+            "why": [
+              "Parameter count does not explain perfect separation this early.",
+              "Correct: a perfect D gives a vanishing learning signal; slow D down.",
+              "The Gaussian prior is not the issue here.",
+              "Fewer samples would make evaluation worse, not training better."
+            ]
+          },
+          {
+            "q": "What does TTUR change?",
+            "options": [
+              "The number of discriminator layers",
+              "The learning rates of G and D are set separately",
+              "The latent dimension grows over training",
+              "The FID feature extractor is retrained"
+            ],
+            "correct": 1,
+            "why": [
+              "TTUR is about optimisation, not architecture.",
+              "Correct: two timescales, typically a larger learning rate for D.",
+              "The latent prior stays fixed.",
+              "The feature extractor must stay fixed for comparable FID."
+            ]
+          },
+          {
+            "q": "Why keep an EMA of the generator weights?",
+            "options": [
+              "It makes D's loss exactly zero",
+              "It smooths evaluation samples without changing the game being trained",
+              "It replaces the need for FID",
+              "It doubles the latent dimension"
+            ],
+            "correct": 1,
+            "why": [
+              "D's loss is unaffected by which G copy you evaluate.",
+              "Correct: averaged weights often give cleaner samples with no extra training cost.",
+              "You still need an external metric.",
+              "EMA does not touch the latent space."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Loss curves alone cannot tell a healthy GAN from a collapsed or one-sided game; use many samples, D accuracy and coverage.<br>
+        2 · FID compares the means and covariances of real and fake features; IS rewards sharp, diverse classifier predictions but ignores your data.<br>
+        3 · Precision measures how real the samples look, recall measures how much of the data is covered — report both with a fixed pipeline.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m3-02">
+      <h2>Cheat sheet — M3·02</h2>
+      <ul>
+        <li>\(\mathrm{IS}=\exp(\mathbb{E}_x D_{\mathrm{KL}}(p(y\mid x)\Vert\bar p(y)))\).</li>
+        <li>\(\mathrm{FID}=\lVert\mu_r-\mu_g\rVert^2+\mathrm{Tr}(\Sigma_r+\Sigma_g-2(\Sigma_r\Sigma_g)^{1/2})\).</li>
+        <li>2-D worked value: means (1,2) vs (1.5,2.5), covariances \(I\) and diag(4,1) → FID = 1.50.</li>
+        <li>Precision = fake samples near real modes; recall = real modes covered by fakes.</li>
+        <li>D accuracy near 100% early: slow D down, try TTUR (\(\eta_D &gt; \eta_G\)) and label smoothing.</li>
+        <li>Keep the feature extractor, preprocessing and sample count fixed when comparing FID.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Salimans, T. — <em>Improved Techniques for Training GANs</em> (2016).</li>
+      <li>Heusel, M. — <em>GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium</em> (2017).</li>
+      <li>Szegedy, C. — <em>Rethinking the Inception Architecture for Computer Vision</em> (2016).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m3-01-gan-basics.html">← GAN basics</a>
+      <a href="m3-03-dcgan-and-conditional-gans.html">Next: DCGAN &amp; conditional GANs →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M3 GANs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m3-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

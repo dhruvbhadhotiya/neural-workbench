@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M6 · Advanced toolkit — DeepLearn Lab</title>
+<meta name="description" content="Seven lessons on reproducibility, performance, interpretability, deployment, debugging, mathematical reference and an interview bank — with exact labs and a module exam.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-root="../../" data-module="m6">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="index.html" aria-current="page">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" style="padding-top:var(--s8)">
+    <div>
+      <p class="hero__eyebrow">Module 6 · Advanced toolkit · 7 lessons</p>
+      <h1>Make your models reproducible, fast, explainable and deployable.</h1>
+      <p class="hero__lede">
+        The final toolkit: seed every run, budget memory and gradients, compute honest saliency,
+        quantise with measured error, debug by decision tree, look up any identity, and rehearse
+        sixty interview answers.
+      </p>
+      <div class="hstack">
+        <a class="btn btn--accent" href="m6-01-reproducibility.html" style="padding:9px 14px;font-size:var(--fs-3)">Start lesson 1 →</a>
+        <a class="btn" href="#exam" style="padding:9px 14px;font-size:var(--fs-3)">Take the module exam</a>
+      </div>
+      <div class="hero__stats" style="margin-top:var(--s6)">
+        <div class="hero__stat"><b>7</b><span>lessons</span></div>
+        <div class="hero__stat"><b>8</b><span>interactive labs</span></div>
+        <div class="hero__stat"><b>60</b><span>interview answers</span></div>
+        <div class="hero__stat"><b>10</b><span>exam questions</span></div>
+      </div>
+    </div>
+    <div aria-hidden="true">
+      <svg viewBox="0 0 420 320" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
+        <defs>
+          <linearGradient id="m6edge" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".15"/>
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity=".8"/>
+          </linearGradient>
+        </defs>
+        <g stroke="url(#m6edge)" stroke-width="1.6" fill="none">
+          <path d="M40 160 H150 M270 160 H380"/>
+          <path d="M150 60 Q210 30 270 60"/>
+          <path d="M150 160 Q210 130 270 160"/>
+          <path d="M150 260 Q210 230 270 260"/>
+          <path d="M40 160 Q80 60 150 60 M40 160 Q80 260 150 260"/>
+          <path d="M270 60 Q340 60 380 160 M270 260 Q340 260 380 160"/>
+        </g>
+        <g fill="var(--surface)" stroke="var(--accent)" stroke-width="2">
+          <circle cx="40" cy="160" r="11"/><circle cx="150" cy="60" r="11"/>
+          <circle cx="150" cy="160" r="11"/><circle cx="150" cy="260" r="11"/>
+          <circle cx="270" cy="60" r="11"/><circle cx="270" cy="160" r="11"/>
+          <circle cx="270" cy="260" r="11"/><circle cx="380" cy="160" r="13" fill="var(--accent)" stroke="none"/>
+        </g>
+        <g font-family="ui-monospace, monospace" font-size="10" fill="var(--ink-3)">
+          <text x="20" y="300">seed</text><text x="135" y="300">train</text>
+          <text x="255" y="300">explain</text><text x="360" y="300">ship</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="section-head">
+      <h2>How to use this module</h2>
+      <p>offline · eight labs · one exam</p>
+    </div>
+    <div class="grid3">
+      <div class="callout callout--tip" style="margin:0">
+        <p class="callout__title">Read badges first</p>
+        <p><span class="badge badge--exact">Exact math</span> means the browser computes every number.
+           <span class="badge badge--illustrative">Illustrative</span> means a stated simulation or stored
+           schematic — two of the eight labs are honest about that.</p>
+      </div>
+      <div class="callout callout--bridge" style="margin:0">
+        <p class="callout__title">A toolkit, not a theory module</p>
+        <p>Each lesson answers an operational question: what do I log, what fits in memory, what
+           moved the prediction, how do I ship it, and what do I check when it breaks?</p>
+      </div>
+      <div class="callout callout--math" style="margin:0">
+        <p class="callout__title">Same notation throughout</p>
+        <p>\(\eta\) is the learning rate, \(\lambda\) the decay strength, images are NCHW, and logits
+           are pre-softmax outputs. M6 uses exactly the symbols from M0–M5.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap" id="lessons">
+    <div class="section-head">
+      <h2>The seven lessons</h2>
+      <p>M6 · advanced toolkit</p>
+    </div>
+
+    <div class="module-grid">
+      <a class="module-card" href="m6-01-reproducibility.html">
+        <div class="module-card__top"><span class="module-card__n">M6 · 01</span><span class="tag">Seeds</span></div>
+        <h3>Seeds, determinism and experiment tracking</h3>
+        <p>Five random sources, a replay digest, config hashes and the standard error of a metric averaged over seeds.</p>
+        <div class="module-card__meta"><span>Lesson 1 of 7 · 16 min read</span><span>1 lab</span></div>
+      </a>
+
+      <a class="module-card" href="m6-02-performance.html">
+        <div class="module-card__top"><span class="module-card__n">M6 · 02</span><span class="tag">AMP / DDP</span></div>
+        <h3>AMP, gradient accumulation and DDP</h3>
+        <p>Activation memory in bytes, effective batch B·A·W, fp16 loss scaling and the all-reduce mean.</p>
+        <div class="module-card__meta"><span>Lesson 2 of 7 · 18 min read</span><span>1 lab</span></div>
+      </a>
+
+      <a class="module-card" href="m6-03-interpretability.html">
+        <div class="module-card__top"><span class="module-card__n">M6 · 03</span><span class="tag">Saliency</span></div>
+        <h3>Saliency and Grad-CAM</h3>
+        <p>Gradients of a class logit on an editable image, signed versus absolute maps, SmoothGrad and sanity checks.</p>
+        <div class="module-card__meta"><span>Lesson 3 of 7 · 17 min read</span><span>1 lab</span></div>
+      </a>
+
+      <a class="module-card" href="m6-04-deployment.html">
+        <div class="module-card__top"><span class="module-card__n">M6 · 04</span><span class="tag">Quantization</span></div>
+        <h3>Quantization and ONNX export</h3>
+        <p>The affine quantisation map, real error measurements, INT8 size reduction and deployment parity checks.</p>
+        <div class="module-card__meta"><span>Lesson 4 of 7 · 16 min read</span><span>1 lab</span></div>
+      </a>
+
+      <a class="module-card" href="m6-05-debugging-playbook.html">
+        <div class="module-card__top"><span class="module-card__n">M6 · 05</span><span class="tag">Debugging</span></div>
+        <h3>The systematic debugging playbook</h3>
+        <p>Loss at init, one-batch overfit, gradient norms, an LR range sweep and a saved decision ladder.</p>
+        <div class="module-card__meta"><span>Lesson 5 of 7 · 18 min read</span><span>2 labs</span></div>
+      </a>
+
+      <a class="module-card" href="m6-06-math-cheatsheets.html">
+        <div class="module-card__top"><span class="module-card__n">M6 · 06</span><span class="tag">Reference</span></div>
+        <h3>Linear algebra, chain rule and probability</h3>
+        <p>Matrix identities, Jacobian products on a unit square, entropy/KL/CE, softmax and attention shapes.</p>
+        <div class="module-card__meta"><span>Lesson 6 of 7 · 15 min read</span><span>1 lab</span></div>
+      </a>
+
+      <a class="module-card" href="m6-07-glossary-and-interviews.html">
+        <div class="module-card__top"><span class="module-card__n">M6 · 07</span><span class="tag">Interview</span></div>
+        <h3>Glossary and interview bank</h3>
+        <p>A searchable index built from the shared glossary plus 60 printable questions grouped by module.</p>
+        <div class="module-card__meta"><span>Lesson 7 of 7 · 20 min read</span><span>1 lab</span></div>
+      </a>
+    </div>
+  </section>
+
+  <section class="roadmap" id="exam-section" style="padding-top:0">
+    <div class="section-head">
+      <h2 id="exam">Module exam</h2>
+      <p>10 questions · feedback after submit</p>
+    </div>
+    <p class="small muted">
+      Covers all seven M6 lessons. Answers are stored locally, so you can leave and come back.
+    </p>
+
+    <section class="quiz" data-quiz="m6-exam" data-exam="1">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "M6 module exam — advanced toolkit",
+        "questions": [
+          {
+            "q": "Which list includes all the independent random sources that must be pinned for a reproducible PyTorch run?",
+            "options": [
+              "Python random, NumPy, torch CPU, torch CUDA, DataLoader workers",
+              "Only torch CPU and torch CUDA",
+              "Python random and the learning-rate scheduler",
+              "NumPy and the loss function"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: these are separate streams, plus cuDNN kernel choice for bitwise replay.",
+              "Missing Python, NumPy and the workers.",
+              "A scheduler is deterministic; the other streams are not covered.",
+              "A loss function draws no random numbers."
+            ]
+          },
+          {
+            "q": "Three final accuracies are 0.82, 0.85 and 0.87. What is the mean over seeds?",
+            "options": ["0.82", "0.85", "0.8467", "0.87"],
+            "correct": 2,
+            "why": [
+              "That is the minimum seed.",
+              "That is the median, not the mean.",
+              "Correct: (0.82 + 0.85 + 0.87)/3 = 0.8467.",
+              "That is the maximum seed; reporting it is cherry-picking."
+            ]
+          },
+          {
+            "q": "Micro-batch 8, accumulation 4, 2 workers: effective batch and activation memory scale respectively as…",
+            "options": [
+              "64; linear in B, independent of A",
+              "16; independent of B",
+              "32; linear in A",
+              "64; linear in A"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: B_eff = 8×4×2 = 64; activations scale with B but not with A.",
+              "That forgets the accumulation factor and misstates memory.",
+              "That omits the workers.",
+              "Accumulation adds sequential micro-batches, not peak live memory."
+            ]
+          },
+          {
+            "q": "A true gradient 1e-8 is scaled by S = 65536 for fp16. Which statement is correct?",
+            "options": [
+              "The stored gradient is 1e-8 and will underflow",
+              "The stored gradient is about 6.55e-4; after unscaling it is 1e-8",
+              "Scaling changes the optimisation direction",
+              "The scaler should be disabled for small gradients"
+            ],
+            "correct": 1,
+            "why": [
+              "Without scaling it would underflow; the scaled value is larger.",
+              "Correct: 1e-8 × 65536 = 6.5536e-4, and dividing again recovers 1e-8.",
+              "Correct scaling leaves the unscaled gradient unchanged.",
+              "Small gradients are exactly why scaling exists."
+            ]
+          },
+          {
+            "q": "Four DDP ranks produce gradients 0.4, 0.8, −0.2 and 1.0 for one parameter. Each rank applies…",
+            "options": ["2.0", "0.5", "0.8", "0.25"],
+            "correct": 1,
+            "why": [
+              "That is the sum, which would quadruple the effective learning rate.",
+              "Correct: the all-reduce mean is (0.4+0.8−0.2+1.0)/4 = 0.5.",
+              "That is one rank's value.",
+              "That divides the sum by the wrong count."
+            ]
+          },
+          {
+            "q": "For a linear scorer y = 2x₁ − 3x₂ + 0.5x₃, the absolute saliency map is…",
+            "options": ["(2, −3, 0.5)", "(2, 3, 0.5)", "(0.2, 0.7, 0.4)", "(−2, 3, −0.5)"],
+            "correct": 1,
+            "why": [
+              "That is the signed gradient.",
+              "Correct: saliency is the componentwise magnitude of the gradient.",
+              "That is the input vector.",
+              "That changes signs without taking magnitudes."
+            ]
+          },
+          {
+            "q": "With x = 1.37, s = 0.02 and z = −128, quantisation gives q = −59 and x̂ = 1.38. The absolute error is…",
+            "options": ["0.02", "0.01", "0.42", "0"],
+            "correct": 1,
+            "why": [
+              "That is the scale, not the error.",
+              "Correct: |1.37 − 1.38| = 0.01, equal to s/2 here.",
+              "That would be a clipped value's error.",
+              "Rounding 68.5 to 69 introduces a nonzero error."
+            ]
+          },
+          {
+            "q": "A balanced 10-class classifier has cross-entropy about 0.69 at step 0. What does that suggest?",
+            "options": [
+              "It is the correct ln 2 for a binary problem, so check C and label range",
+              "It is the correct ln 10, so nothing needs checking",
+              "The model has already converged",
+              "Cross-entropy cannot be below 1 for ten classes"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: 0.693 = ln 2; a ten-class head should start near ln 10 = 2.303. Check labels and head.",
+              "ln 10 is 2.303, not 0.693.",
+              "A near-init loss means no learning yet.",
+              "Cross-entropy can be arbitrarily close to zero for confident correct predictions."
+            ]
+          },
+          {
+            "q": "If g is applied first and f second, the composed Jacobian is J_f(g(x))·J_g(x). A unit square under J = [[4,1],[10,2]] has area…",
+            "options": ["1", "2", "18", "8"],
+            "correct": 1,
+            "why": [
+              "Area changes unless the determinant has magnitude 1.",
+              "Correct: |det J| = |4×2 − 1×10| = 2.",
+              "That is the sum of the entries.",
+              "That is one diagonal product."
+            ]
+          },
+          {
+            "q": "Which answer is a correct Grad-CAM recap?",
+            "options": [
+              "It averages gradients over space per channel and weights the feature maps, then applies ReLU",
+              "It takes the largest input pixel gradient",
+              "It always upsamples with nearest neighbour",
+              "It uses softmax probabilities instead of logits"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: alpha_k^c pools ∂y^c/∂A^k over space; L^c = ReLU(Σ alpha_k A_k).",
+              "That describes saliency, not Grad-CAM.",
+              "Upsampling mode is a choice, not a definition.",
+              "Grad-CAM differentiates a logit."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+  </section>
+
+  <footer class="sitefoot">
+    <div>DeepLearn Lab · M6 Advanced toolkit · static notes, built to be read offline</div>
+    <div class="hstack" style="gap:var(--s4)">
+      <a href="../../index.html">All modules</a>
+      <a href="#" data-action="search">Search</a>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </div>
+  </footer>
+</main>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m6-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

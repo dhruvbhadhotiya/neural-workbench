@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossary and interview bank · DeepLearn Lab</title>
+<meta name="description" content="Every course term in one searchable index plus 60 interview questions with self-contained answers, grouped by module and printable.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m6" data-lesson="m6-07" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="index.html" aria-current="page">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search lessons</button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 6 · Advanced toolkit</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M6 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m6-07">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M6 Advanced toolkit</a> / <span>Glossary and interviews</span>
+    </nav>
+
+    <h1>Glossary and interview bank</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 7 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      One place to look up every term, and 60 interview questions whose answers explain the reason,
+      not just the definition. Both are built for offline reading and printing.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Find a term by name, definition or category without leaving the page.</li>
+        <li>Answer common deep-learning interview questions with a reason attached.</li>
+        <li>Print the bank with all answers visible for revision.</li>
+        <li>Connect a term's formal definition to the module where it appeared.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        A glossary in a textbook is alphabetical; a useful one is connected. Here every definition
+        comes from the same data file the inline tooltips use, so the word on the page and the word
+        in the lab always mean the same thing. The interview bank adds the "why" that exams ask for.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: definitions versus explanations</h2>
+
+    <p>
+      A definition tells you what a thing is; an interview answer tells you what it is <em>for</em>
+      and what breaks without it. "Gradient clipping limits the norm of a gradient" is a definition.
+      "Without it, one large batch gradient can multiply every parameter by a huge step" is an
+      explanation. Read the bank by trying to answer aloud before opening a solution.
+    </p>
+
+    <p>
+      The print stylesheet expands every <code>&lt;details&gt;</code> element, so printing this page
+      produces a question sheet followed immediately by its answers — no hidden text.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        In an interview, state the formula, then the failure mode it prevents. The second sentence is
+        what separates memorisation from understanding.
+      </p>
+    </div>
+
+    <h2 id="math">The math of a filter</h2>
+
+    <p>
+      Let \(N\) be the number of glossary terms in the data file and \(m(q)\) the number whose
+      name or definition contains the query \(q\). The displayed coverage fraction is
+    </p>
+
+    \[ f(q)=\frac{m(q)}{N} \]
+
+    <p>
+      Here \(q\) is the search string, \(m(q)\) the matched term count and \(N\) the total term
+      count; both counts are computed live from <code>DL.GLOSSARY</code>.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> If the file contains \(N=69\) terms and a query matches
+      \(m=7\), then \(f=7/69=0.1014\), displayed as about \(10\%\). The chip filter applies the
+      same fraction after restricting to one category: a category with 12 terms and 3 matches
+      yields \(3/12=0.25\).
+    </p>
+
+    <h2 id="lab">Lab: filterable glossary</h2>
+
+    <p>
+      The search box matches term names and definitions; the chips restrict to one category at a
+      time. All terms and definitions come from <code>DL.GLOSSARY</code> in the shared data file —
+      no second glossary is stored here.
+    </p>
+
+    <section class="lab" data-widget="m6-07-glossary" data-badge="exact"
+             data-title="Search and filter every course term"
+             data-note="Exact: every listed term and definition is read from DL.GLOSSARY; match counts and category counts are computed from that data in your browser.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Reference page</h2>
+
+    <p>
+      There is no code listing on this page: it is a lookup tool. The widget above reads the shared
+      glossary file, and the questions below are organised by the module that introduced each idea.
+    </p>
+
+    <h2 id="bank">Interview question bank — 60 questions</h2>
+
+    <h3 id="qa-m0">M0 · Foundations (9 questions)</h3>
+    <details><summary>1. Why can a single neuron not compute XOR?</summary><p>Its boundary is \(w_1x_1+w_2x_2+b=0\), one straight line. XOR's two positive corners are diagonally opposite, so no single line can put both on one side and both negatives on the other. A hidden layer with nonlinear activations creates multiple half-planes and solves it.</p></details>
+    <details><summary>2. How many parameters does a 2→4→1 MLP with ReLU hidden units have?</summary><p>17. The first layer has \(2\cdot4+4=12\) (weights plus biases) and the output layer \(4\cdot1+1=5\). ReLU itself has no learned parameters.</p></details>
+    <details><summary>3. Why is a nonlinearity necessary between linear layers?</summary><p>Composing affine maps gives another affine map: \(W_2(W_1x+b_1)+b_2=(W_2W_1)x+(W_2b_1+b_2)\). Without a nonlinearity, depth adds no expressive power at all.</p></details>
+    <details><summary>4. When should you use BCEWithLogitsLoss instead of BCELoss?</summary><p>When the model outputs logits (pre-sigmoid). BCEWithLogitsLoss fuses the sigmoid and log into one numerically stable operation; BCELoss expects probabilities in \((0,1)\). Using both applies sigmoid twice and saturates the loss.</p></details>
+    <details><summary>5. What is the gradient of cross-entropy with respect to logits?</summary><p>For softmax cross-entropy with target index \(y\), \(\partial\mathcal L/\partial z=\mathrm{softmax}(z)-\mathbf 1_y\). The fused formulation cancels the softmax Jacobian and is numerically simpler than differentiating the log of a probability.</p></details>
+    <details><summary>6. Write the plain SGD update and define each symbol.</summary><p>\(\theta\leftarrow\theta-\eta\nabla_\theta\mathcal L\), where \(\theta\) are parameters, \(\eta\) the learning rate and \(\nabla_\theta\mathcal L\) the gradient of the mean loss. The minus sign moves downhill because the gradient points uphill.</p></details>
+    <details><summary>7. What is the PyTorch momentum convention?</summary><p>\(v\leftarrow\beta v+\nabla_\theta\mathcal L\) and \(\theta\leftarrow\theta-\eta v\): the gradient is added directly to velocity, without the \((1-\beta)\) factor used in some other frameworks. \(\beta\) is usually about 0.9.</p></details>
+    <details><summary>8. How does AdamW differ from Adam with L2 regularisation?</summary><p>AdamW applies weight decay directly to the parameters, \(\theta\leftarrow\theta-\eta(\hat m/(\sqrt{\hat v}+\epsilon)+\lambda\theta)\), instead of adding \(\lambda\theta\) to the gradient. Decoupling keeps the decay from being distorted by the adaptive denominator \(\sqrt{\hat v}\).</p></details>
+    <details><summary>9. Compare Xavier and He initialisation variances.</summary><p>Xavier draws weights with variance \(2/(D_{\text{in}}+D_{\text{out}})\), suited to tanh/sigmoid-like activations; He uses \(2/D_{\text{in}}\), suited to ReLU because roughly half the units are zero. Their goal is to keep activation variance roughly constant across layers.</p></details>
+
+    <h3 id="qa-m1">M1 · Convolutional networks (9 questions)</h3>
+    <details><summary>10. Give the Conv2d output-size formula and define its symbols.</summary><p>\(H'=\lfloor(H+2P-D(K-1)-1)/S\rfloor+1\), with \(H\) the input size, \(P\) padding, \(K\) kernel size, \(D\) dilation and \(S\) stride. The same formula applies to width with \(W\).</p></details>
+    <details><summary>11. How many parameters does a 3×3 conv with 3 input and 16 output channels have, including bias?</summary><p>448. Each of the 16 output channels has a \(3\cdot3\cdot3=27\)-weight kernel, giving \(16\cdot27=432\) weights plus 16 biases.</p></details>
+    <details><summary>12. What does NCHW mean and why does it matter?</summary><p>Batch, Channels, Height, Width — the tensor layout used throughout this course. An image batch has shape \((N,C,H,W)\), a conv weight \((C_{\text{out}},C_{\text{in}},K_H,K_W)\) and a feature map \((N,C_{\text{out}},H',W')\). Writing NHWC by mistake transposes every shape calculation.</p></details>
+    <details><summary>13. What is the receptive field of two stacked 3×3 convolutions with stride 1?</summary><p>5×5. The first layer sees 3 input pixels; the second combines three neighbouring outputs of the first, adding two more pixels on each axis: \(3+2=5\). With dilation the added span is \(D(K-1)\) instead of \(K-1\).</p></details>
+    <details><summary>14. What does a 1×1 convolution do?</summary><p>It mixes channels at each spatial position without changing \(H,W\). It can reduce or expand channel count cheaply and, followed by a nonlinearity, adds a per-pixel MLP — as used in bottleneck blocks.</p></details>
+    <details><summary>15. How do max pooling and average pooling differ?</summary><p>Max pooling keeps the largest activation in each window and can discard small but meaningful signals; average pooling takes the mean and smooths. Both use the same output-size formula with \(K\) and \(S\) and no learned parameters.</p></details>
+    <details><summary>16. Write the BatchNorm transform and say what changes at evaluation.</summary><p>\(\hat x=(x-\mu_B)/\sqrt{\sigma_B^2+\epsilon}\), \(y=\gamma\hat x+\beta\). During training \(\mu_B,\sigma_B^2\) come from the batch; at evaluation the running estimates are used, so the output no longer depends on other batch members.</p></details>
+    <details><summary>17. Why do residual connections help very deep networks train?</summary><p>The identity path \(y=F(x)+x\) gives gradients a direct route to earlier layers, avoiding repeated multiplication by small Jacobians. It also makes a block easy to initialise as near-identity, so adding depth initially cannot degrade the function.</p></details>
+    <details><summary>18. How do you fine-tune a pretrained classifier on a new task?</summary><p>Replace the final head to match the new class count, often freeze early layers first, and train with a much smaller \(\eta\) than pretraining (for example 1e-4 rather than 1e-2). Unfreeze progressively and keep the same normalisation and preprocessing used during pretraining.</p></details>
+
+    <h3 id="qa-m2">M2 · Sequences and NLP (9 questions)</h3>
+    <details><summary>19. Write the vanilla RNN recurrence.</summary><p>\(\mathbf h_t=\tanh(\mathbf x_t W_{xh}+\mathbf h_{t-1}W_{hh}+\mathbf b_h)\); the output may be \(\hat{\mathbf y}_t=\mathrm{softmax}(\mathbf h_tW_{hy}+\mathbf b_y)\). \(W_{xh},W_{hh}\) are shared across all timesteps.</p></details>
+    <details><summary>20. Why is BPTT unstable and expensive?</summary><p>Unrolling \(T\) steps means backpropagating through a chain of repeated Jacobian multiplications, so gradients can shrink or explode exponentially in \(T\). The unrolled graph also uses memory proportional to sequence length; truncation limits both effects.</p></details>
+    <details><summary>21. What do the LSTM gates do?</summary><p>\(f_t\) forgets part of the previous cell state, \(i_t\) controls the candidate \(\tilde c_t\), \(o_t\) controls what the cell exposes as hidden state, and \(c_t=f_tc_{t-1}+i_t\tilde c_t\). The additive cell path prevents the repeated squashing that causes vanishing gradients.</p></details>
+    <details><summary>22. How does a GRU differ from an LSTM?</summary><p>A GRU has two gates, the update \(z_t\) and reset \(r_t\), and no separate cell state; an LSTM has three gates plus \(c_t\). GRUs have fewer parameters and often train faster with similar performance on smaller datasets.</p></details>
+    <details><summary>23. Write the attention formula and explain the \(1/\sqrt{d_k}\) factor.</summary><p>\(\mathrm{Attention}(Q,K,V)=\mathrm{softmax}(QK^\top/\sqrt{d_k})V\). Scores are dot products of \(d_k\)-dimensional vectors, whose variance grows with \(d_k\); dividing by \(\sqrt{d_k}\) restores roughly unit variance so softmax does not saturate.</p></details>
+    <details><summary>24. What are the shapes in multi-head attention?</summary><p>With batch \(N\), heads \(H_{\text{heads}}\), length \(T\) and \(d_k=D/H_{\text{heads}}\): \(Q,K,V\) are \((N,H_{\text{heads}},T,d_k)\), scores \((N,H_{\text{heads}},T,T)\), output \((N,H_{\text{heads}},T,d_k)\), concatenated to \((N,T,D)\).</p></details>
+    <details><summary>25. Why add positional encoding to token embeddings?</summary><p>Self-attention is permutation-equivariant, so without position information it cannot distinguish word order. The sinusoidal scheme uses \(PE_{(pos,2i)}=\sin(pos/10000^{2i/D})\) and the paired cosine, giving each position a unique, smoothly varying vector.</p></details>
+    <details><summary>26. What is teacher forcing?</summary><p>During training, the decoder receives the ground-truth previous token instead of its own prediction. It stabilises early training and lets all timesteps be processed in parallel; at inference the model must use its own outputs, which can cause exposure bias.</p></details>
+    <details><summary>27. Why use subword tokenization?</summary><p>Word-level vocabularies become huge and suffer out-of-vocabulary words; character-level sequences become very long. Subwords such as BPE balance a manageable vocabulary with the ability to compose unseen words from known pieces.</p></details>
+
+    <h3 id="qa-m3">M3 · Generative models (8 questions)</h3>
+    <details><summary>28. Write the GAN minimax objective.</summary><p>\(\min_G\max_D\,\mathbb E_{x\sim p_{\text{data}}}[\log D(x)]+\mathbb E_{\mathbf z}[\log(1-D(G(\mathbf z)))]\). \(D\) tries to separate real from generated samples; \(G\) tries to fool \(D\). At equilibrium the generated distribution matches the data distribution.</p></details>
+    <details><summary>29. Why use the non-saturating generator loss?</summary><p>Instead of minimising \(\mathbb E\log(1-D(G(z)))\), maximise \(\mathbb E\log D(G(z))\). When \(D\) is confident and correctly rejects generated samples, the original loss saturates near zero gradient; the non-saturating version keeps a strong signal.</p></details>
+    <details><summary>30. What is mode collapse?</summary><p>The generator produces only a few distinct outputs that all fool the discriminator, ignoring most of the data distribution. Signs are low sample diversity despite a good discriminator score; remedies include minibatch discrimination, unrolling, WGAN-GP and diverse architectures.</p></details>
+    <details><summary>31. What changes in WGAN-GP?</summary><p>The discriminator becomes a 1-Lipschitz critic whose output is not squeezed by a sigmoid, and a gradient penalty encourages \(\lVert\nabla_{\hat x}D(\hat x)\rVert\approx1\) on interpolations between real and fake samples. This gives smoother gradients and less mode collapse than weight clipping.</p></details>
+    <details><summary>32. How should FID be read?</summary><p>Lower is better. It compares the mean and covariance of Inception features of real and generated image sets; it needs enough samples (thousands) to be stable, and scores from different feature extractors or sample sizes are not comparable.</p></details>
+    <details><summary>33. What are the DCGAN design rules?</summary><p>Use strided convolutions in the discriminator and transposed convolutions in the generator, batch normalisation in both, ReLU in the generator and LeakyReLU in the discriminator, and a tanh output for images scaled to \([-1,1]\). Avoid fully connected layers and pooling.</p></details>
+    <details><summary>34. How does CycleGAN train without paired images?</summary><p>It learns mappings \(G_{AB}\) and \(G_{BA}\) with adversarial losses plus cycle consistency: \(G_{BA}(G_{AB}(x))\approx x\) and \(G_{AB}(G_{BA}(y))\approx y\). The cycle loss removes the need for matching pairs.</p></details>
+    <details><summary>35. What is a minimal GAN sanity check?</summary><p>Fix a noise vector and inspect samples throughout training; check sample diversity, not only the loss curves; verify the discriminator does not reach near-perfect accuracy instantly. Also confirm the generator's gradient norm is non-zero — otherwise \(D\) has won and \(G\) is not learning.</p></details>
+
+    <h3 id="qa-m4">M4 · Autoencoders and transformers (9 questions)</h3>
+    <details><summary>36. What does the bottleneck of an autoencoder force?</summary><p>A narrow latent code limits how much information can pass through, so the network must learn a compressed representation useful for reconstructing the input. Reconstruction error alone, however, does not guarantee a semantically useful code.</p></details>
+    <details><summary>37. What does a VAE encoder output?</summary><p>Parameters of a distribution, usually \(\mu\) and \(\log\sigma^2\), rather than a single vector. A latent sample is drawn as \(\mathbf z=\mu+\sigma\odot\epsilon\) with \(\epsilon\sim\mathcal N(0,I)\), so the encoder is probabilistic.</p></details>
+    <details><summary>38. Write the ELBO and explain its two terms.</summary><p>\(\mathcal L=\mathbb E_{q_\phi(z|x)}[\log p_\theta(x|z)]-D_{\mathrm{KL}}(q_\phi(z|x)\Vert p(z))\). The first term rewards accurate reconstruction; the second keeps the posterior close to the prior, acting as a regulariser.</p></details>
+    <details><summary>39. Why is the reparameterisation trick necessary?</summary><p>Sampling directly from \(q_\phi(z|x)\) is a nondifferentiable operation with respect to \(\phi\). Writing \(z=\mu+\sigma\epsilon\) moves randomness to a parameter-free variable so gradients can flow through \(\mu\) and \(\sigma\).</p></details>
+    <details><summary>40. What does \(\beta > 1\) do in a \(\beta\)-VAE?</summary><p>It multiplies the KL term, increasing pressure for an isotropic, factorised latent space. This often improves disentanglement at the cost of reconstruction quality; \(\beta=1\) recovers the standard ELBO.</p></details>
+    <details><summary>41. How do BERT and GPT differ in attention direction?</summary><p>BERT is an encoder with bidirectional self-attention, trained with masked token prediction, so each token sees both left and right context. GPT is a decoder with a causal mask, so each token can attend only to previous positions — appropriate for autoregressive generation.</p></details>
+    <details><summary>42. Why does masked language modelling work?</summary><p>Hiding a fraction of tokens and predicting them from both directions forces the model to build contextual representations rather than memorise left-to-right n-grams. It also lets every masked position contribute a supervised signal in the same pass.</p></details>
+    <details><summary>43. What is LoRA's core idea?</summary><p>Freeze the pretrained weight matrix \(W\) and train a low-rank update \(\Delta W=BA\) with rank \(r\ll D\). Only \(A\) and \(B\) are trainable, which cuts trainable parameters and checkpoint size dramatically while keeping inference mergeable into \(W\).</p></details>
+    <details><summary>44. Why anneal the KL weight in a VAE?</summary><p>Starting with a small \(\beta\) lets reconstruction learning establish a useful encoder before the KL pressure forces the posterior toward the prior. Ramping \(\beta\) to 1 reduces posterior collapse, where the decoder ignores the latent code.</p></details>
+
+    <h3 id="qa-m5">M5 · Segmentation and Kaggle (8 questions)</h3>
+    <details><summary>45. Give IoU and Dice and their relationship.</summary><p>\(\mathrm{IoU}=|A\cap B|/|A\cup B|\) and \(\mathrm{Dice}=2|A\cap B|/(|A|+|B|)\). They are linked by \(\mathrm{Dice}=2\,\mathrm{IoU}/(1+\mathrm{IoU})\), so Dice is always at least as large as IoU for the same masks.</p></details>
+    <details><summary>46. Why does U-Net concatenate encoder features into the decoder?</summary><p>Pooling loses spatial detail needed for precise boundaries. Skip connections bring high-resolution early feature maps to the corresponding decoder stage, localising edges while deeper features supply semantic context.</p></details>
+    <details><summary>47. Write the transposed-convolution output size formula.</summary><p>\(H'=(H-1)S-2P+D(K-1)+\text{output\_padding}+1\), where \(S\) is stride, \(P\) padding, \(D\) dilation and \(K\) kernel size. Unlike the forward conv formula, stride multiplies \(H-1\).</p></details>
+    <details><summary>48. What is the key idea of a fully convolutional network?</summary><p>Replace the classifier's fully connected layers with convolutions so the network accepts arbitrary spatial sizes and outputs a dense prediction map. Upsampling then restores the input resolution for per-pixel labels.</p></details>
+    <details><summary>49. What does Mask R-CNN add to Faster R-CNN?</summary><p>A parallel mask prediction branch on each region of interest, and RoIAlign to avoid the quantisation of RoI Pooling. It therefore produces both a class/box and a pixel-level mask per detected object.</p></details>
+    <details><summary>50. Why is class imbalance severe in segmentation?</summary><p>Background often occupies most pixels, so a model can score high accuracy while missing small foreground objects. Weighted cross-entropy, Dice loss or focal loss force the optimizer to care about the rare class.</p></details>
+    <details><summary>51. How does panoptic segmentation differ from semantic segmentation?</summary><p>Semantic segmentation assigns one class to every pixel but does not distinguish separate instances of that class. Panoptic segmentation assigns both a semantic class and, for countable objects, an instance ID — it is the union of semantic and instance segmentation.</p></details>
+    <details><summary>52. What leakage ruins a Kaggle-style validation score?</summary><p>Group leakage: the same entity or closely related image appears in train and validation. Use GroupKFold for repeated entities and a chronological split for time series; target-encoding statistics must be computed inside each fold.</p></details>
+
+    <h3 id="qa-m6">M6 · Advanced toolkit (8 questions)</h3>
+    <details><summary>53. Which random sources must be seeded in a PyTorch run?</summary><p>Python's <code>random</code>, NumPy's global generator, the torch CPU generator and the CUDA generator (all devices). DataLoader workers need a seeded <code>generator</code> and <code>worker_init_fn</code>; cuDNN benchmark mode and nondeterministic kernels must also be disabled for bitwise replay.</p></details>
+    <details><summary>54. What is the effective batch size and why divide the loss?</summary><p>\(B_{\text{eff}}=B\cdot A\cdot W\) for per-device batch \(B\), accumulation steps \(A\) and workers \(W\). Dividing each micro-batch loss by \(A\) makes the accumulated gradient the mean over the larger batch; DDP then averages the gradients across workers.</p></details>
+    <details><summary>55. Why does AMP use a loss scale?</summary><p>fp16 gradients smaller than roughly \(6\times10^{-5}\) underflow to zero. Multiplying the loss by a power-of-two scale \(S\) moves gradients into range; after backward they are divided by \(S\), and clipping must happen after that unscaling step.</p></details>
+    <details><summary>56. Define input saliency and say which score to differentiate.</summary><p>\(S_{ij}=|\partial y^c/\partial x_{ij}|\), with \(y^c\) the class logit. Using the logit isolates evidence for class \(c\); the softmax probability also changes when other classes' logits change, which muddies the attribution.</p></details>
+    <details><summary>57. What does SmoothGrad change?</summary><p>It averages absolute gradients over several noisy copies of the input, \(S_{\text{SG}}(x)=\frac1K\sum_k|\partial y^c/\partial(x+\epsilon_k)|\). This suppresses isolated single-pixel spikes that are unstable under tiny perturbations.</p></details>
+    <details><summary>58. Write the affine quantisation map and its error bound.</summary><p>\(q=\operatorname{clip}(\operatorname{round}(x/s)+z)\), \(\hat x=s(q-z)\). If no clipping occurs, \(|x-\hat x|\le s/2\), since rounding changes \(x/s\) by at most half a step. Clipping invalidates the bound because out-of-range values are replaced by an endpoint.</p></details>
+    <details><summary>59. What is the expected cross-entropy at initialisation for \(C\) balanced classes?</summary><p>About \(\ln C\), because near-zero logits give \(p_c\approx1/C\). Thus \(0.693\) is correct for binary and \(2.303\) for ten classes. A mismatch points to label or head problems; a value that never falls points to gradient or learning-rate problems.</p></details>
+    <details><summary>60. Why call <code>model.eval()</code> before export or attribution?</summary><p>Eval mode disables dropout randomness and makes batch normalisation use running statistics instead of batch statistics. Both otherwise make two forward passes on the same input disagree, which breaks ONNX parity checks and reproducible saliency maps.</p></details>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Answering with a definition only</p>
+        <p>
+          "Attention is a weighted average" is true but incomplete. Say what the weights are and why
+          the scaling factor exists.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Mixing up metric directions</p>
+        <p>
+          Lower FID is better; higher IoU, Dice, precision, recall and mAP are better. State the
+          direction before quoting any number.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Ignoring shape conventions</p>
+        <p>
+          Weights are \((C_{\text{out}},C_{\text{in}},K_H,K_W)\) and images are NCHW. An answer that
+          silently uses NHWC will get attention and conv shapes wrong.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting the failure mode</p>
+        <p>
+          For nearly every concept there is a matching bug: no nonlinearity, no scaler, no eval
+          mode, no seed. Naming it demonstrates understanding.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      In an interview you say "my model does not converge, so I will switch from SGD to Adam". The
+      interviewer asks what you checked first. What is the better answer?
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        Check the pipeline before the optimizer: loss at init against \(\ln C\), whether one batch
+        can be overfit, label range and dtype, gradient norms, and the learning-rate range. If those
+        pass, tune \(\eta\) before switching optimizers. Changing optimizers first mixes a
+        hyperparameter change with an undiagnosed implementation bug.
+      </p>
+      <p class="small muted">
+        If you do switch to Adam, reduce the learning rate relative to your SGD setting — Adam's
+        default \(10^{-3}\) is not a drop-in replacement for SGD's \(0.1\).
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m6-07">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — glossary and interviews",
+        "questions": [
+          {
+            "q": "Which answer best explains why Xavier initialisation uses 2/(fan_in+fan_out)?",
+            "options": ["It maximises the learning rate", "It keeps activation variance roughly stable in both forward and backward passes", "It makes all weights positive", "It removes the need for a bias"],
+            "correct": 1,
+            "why": ["Initialisation does not set the learning rate.", "Correct: averaging fan-in and fan-out balances forward and backward variance.", "Weights remain signed.", "Bias is independent of the scheme."]
+          },
+          {
+            "q": "A 3×3 conv, 3 input channels, 16 output channels, bias: parameter count is…",
+            "options": ["432", "448", "144", "464"],
+            "correct": 1,
+            "why": ["That omits the 16 biases.", "Correct: 9×3×16 + 16 = 448.", "That uses one input channel.", "That adds 32 biases."]
+          },
+          {
+            "q": "In NCHW, a conv kernel has shape…",
+            "options": ["(K, K, C_in, C_out)", "(C_out, C_in, K_H, K_W)", "(N, C, H, W)", "(C_in, C_out, K, K)"],
+            "correct": 1,
+            "why": ["That is a different framework's layout.", "Correct: output channels first, then input channels, then kernel height and width.", "That is an image batch, not a kernel.", "That swaps input and output channels."]
+          },
+          {
+            "q": "What does the reparameterisation trick allow in a VAE?",
+            "options": ["Sampling without any randomness", "Gradients to flow through μ and σ", "Removing the decoder", "Replacing KL with MSE"],
+            "correct": 1,
+            "why": ["Randomness is still present via ε.", "Correct: z = μ + σ·ε moves the sampling outside the parameters.", "The decoder remains necessary.", "The KL term is part of the ELBO."]
+          },
+          {
+            "q": "For Dice and IoU on the same masks, which is true?",
+            "options": ["Dice = 2·IoU/(1+IoU)", "IoU = 2·Dice/(1+Dice)", "They are always equal", "Dice is always smaller"],
+            "correct": 0,
+            "why": ["Correct: substituting the definitions gives this identity.", "That reverses the relationship.", "They coincide only at 0 and 1.", "Dice is greater than or equal to IoU."]
+          },
+          {
+            "q": "Which combination is a complete first-pass debugging sequence?",
+            "options": ["Switch optimiser, add layers, train longer", "Baseline, loss at init, overfit one batch, gradient norms, LR range", "Increase batch size, lower weight decay, randomise labels", "Remove validation, raise learning rate, change loss"],
+            "correct": 1,
+            "why": ["That changes several unknowns at once.", "Correct: each step localises the earliest failing link.", "Randomising labels destroys the signal.", "Validation must be kept."]
+          },
+          {
+            "q": "Why is loss scaling needed with fp16 but usually not bf16?",
+            "options": ["bf16 has more mantissa bits", "bf16 keeps fp32's exponent range, so small gradients do not underflow", "fp16 cannot do matrix multiplication", "bf16 has no gradients"],
+            "correct": 1,
+            "why": ["bf16 has fewer mantissa bits than fp16.", "Correct: its wide exponent range covers small gradient magnitudes.", "fp16 matmuls are widely supported.", "Gradients work in both dtypes."]
+          },
+          {
+            "q": "A GAN's generator produces near-identical images for many noise vectors. This is…",
+            "options": ["Mode collapse", "Gradient clipping", "Teacher forcing", "Posterior collapse"],
+            "correct": 0,
+            "why": ["Correct: the generator has collapsed to a few modes.", "That is a gradient-norm technique.", "That belongs to sequence training.", "That is a VAE failure where the latent code is ignored."]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · The glossary reads one shared data file, so definitions stay identical across tooltips and labs.<br>
+        2 · Sixty answers pair each concept with the failure mode it prevents — state both in an interview.<br>
+        3 · Use the print stylesheet to expand every answer; revise by answering aloud first.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m6-07">
+      <h2>Cheat sheet — M6·07</h2>
+      <ul>
+        <li>Coverage fraction \(f(q)=m(q)/N\) from <code>DL.GLOSSARY</code>; e.g. \(7/69\approx10\%\).</li>
+        <li>Foundations: XOR, 17 parameters, fused CE gradient \(p-y\), AdamW decoupled decay.</li>
+        <li>Vision: output size, NCHW conv shape, U-Net skips, Dice \(=2\,\mathrm{IoU}/(1+\mathrm{IoU})\).</li>
+        <li>Sequences/generative: BPTT, LSTM gates, attention \(QK^\top/\sqrt{d_k}\), ELBO, WGAN-GP.</li>
+        <li>Toolkit: seeds, \(B\!\cdot\!A\!\cdot\!W\), loss scaling, saliency, quantisation, \(\ln C\).</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Krizhevsky, A. — <em>ImageNet Classification with Deep Convolutional Neural Networks</em> (2012).</li>
+      <li>Goodfellow, I. — <em>Generative Adversarial Networks</em> (2014).</li>
+      <li>Vaswani, A. — <em>Attention Is All You Need</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m6-06-math-cheatsheets.html">← Previous: math cheatsheets</a>
+      <a href="index.html">Module overview →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M6 Advanced toolkit</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m6-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hugging Face, LoRA and model decisions · DeepLearn Lab</title>
+<meta name="description" content="Use a pretrained pipeline, derive the LoRA parameter count r(d+k), work the d=k=768 r=8 case by hand, and choose the right architecture for a task.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m4" data-lesson="m4-05" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="index.html" aria-current="page">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 4 · Autoencoders</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M4 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m4-05">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M4 Autoencoders</a> / <span>Hugging Face, LoRA and decisions</span>
+    </nav>
+
+    <h1>Hugging Face, LoRA and model decisions</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 5 of 5 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      The pretrained ecosystem hands you a checkpoint and a tokenizer. Your job is to adapt it
+      cheaply, count what you are training, and pick an architecture that matches the task.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Run a Hugging Face <code>pipeline</code> and describe what the checkpoint and tokenizer each provide.</li>
+        <li>Derive the LoRA update \(W'=W+BA\) and count its trainable parameters as \(r(d+k)\).</li>
+        <li>Work the \(d=k=768,\ r=8\) case by hand and compare it with full fine-tuning.</li>
+        <li>Choose an encoder, decoder or encoder–decoder model from the task's input and output shape.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        In scikit-learn you called <code>fit</code> and <code>predict</code> on one object. Here a
+        <strong>checkpoint</strong> supplies pretrained weights, a <strong>tokenizer</strong> supplies
+        the exact id mapping those weights expect, and a <strong>head</strong> maps hidden states to
+        your labels. Instead of updating every weight, LoRA freezes the checkpoint and trains two
+        small matrices per targeted layer.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: adapt a small subspace</h2>
+
+    <p>
+      Full fine-tuning updates every entry of a weight matrix \(\mathbf W\in\mathbb R^{d\times k}\):
+      \(dk\) parameters (plus \(k\) biases). LoRA keeps \(\mathbf W\) frozen and learns an update
+      \(\Delta\mathbf W=\mathbf B\mathbf A\) with \(\mathbf B\in\mathbb R^{d\times r}\) and
+      \(\mathbf A\in\mathbb R^{r\times k}\). If \(r\ll\min(d,k)\), the update lives in a low-rank
+      subspace and costs only \(dr+rk=r(d+k)\) trainable numbers. Symbols: \(d\) is the output
+      dimension of the layer, \(k\) its input dimension, \(r\) the LoRA rank, and \(\alpha\) a scaling
+      constant.
+    </p>
+
+    <p>
+      Architecture choice follows the shape of the task. An <strong>encoder</strong> reads a whole
+      input and is natural for classification or token tagging. A <strong>decoder</strong> generates
+      a sequence one token at a time and is natural for open-ended text. An
+      <strong>encoder–decoder</strong> maps one sequence to another, as in translation or
+      summarisation. These are design patterns, not performance claims.
+    </p>
+
+    <table class="shape-table">
+      <thead><tr><th>Task shape</th><th>Model family</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>one label per sequence</td><td>encoder + classification head</td><td>bidirectional context, pooled vector</td></tr>
+        <tr><td>one label per token</td><td>encoder + token head</td><td>per-position contextual vectors</td></tr>
+        <tr><td>continue a sequence</td><td>causal decoder</td><td>next-token factorisation</td></tr>
+        <tr><td>sequence → different sequence</td><td>encoder–decoder</td><td>separate input and output sides</td></tr>
+      </tbody>
+    </table>
+
+    <div class="keyidea">
+      <p>
+        LoRA trains a rank-\(r\) correction instead of the full matrix. The saving is arithmetic:
+        \(r(d+k)\) versus \(dk+k\). At \(d=k=768, r=8\) that is 12,288 rather than 590,592 numbers
+        per layer — about 2.08%.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="update">1 · The low-rank update</h3>
+
+    <p>
+      With \(\mathbf W\) frozen, the layer computes
+    </p>
+
+    \[ \mathbf h=\mathbf W\mathbf x+\frac{\alpha}{r}\,\mathbf B\mathbf A\mathbf x,
+       \qquad \mathbf B\in\mathbb R^{d\times r},\ \mathbf A\in\mathbb R^{r\times k},\ \Delta\mathbf W=\mathbf B\mathbf A \]
+
+    <p>
+      \(\operatorname{rank}(\mathbf B\mathbf A)\le r\): a product with an inner dimension \(r\) cannot
+      have higher rank. \(\alpha/r\) is a fixed scale chosen when the adapter is configured; it is
+      not learned. \(\mathbf A\) is typically initialised randomly and \(\mathbf B\) with zeros, so
+      training starts exactly at the pretrained model.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Take \(d=3,k=2,r=1\),
+      \(\mathbf A=\begin{bmatrix}1&amp;2\end{bmatrix}\),
+      \(\mathbf B=\begin{bmatrix}3\\4\\5\end{bmatrix}\), and a toy \(\mathbf W=0\). Then
+      \(\mathbf B\mathbf A=\begin{bmatrix}3&amp;6\\4&amp;8\\5&amp;10\end{bmatrix}\) (rank 1: row 2 is
+      \(\tfrac43\) of row 1). For \(\mathbf x=(1,1)^\top\),
+      \(\mathbf B\mathbf A\mathbf x=(3+6,4+8,5+10)^\top=(9,12,15)^\top\). With \(\alpha=r\), the scale
+      is 1 so the answer is unchanged.
+    </p>
+
+    <h3 id="count">2 · Trainable parameter count</h3>
+
+    <p>
+      \(\mathbf B\) has \(d\times r\) entries and \(\mathbf A\) has \(r\times k\) entries, so the
+      adapter has \(dr+rk=r(d+k)\) trainable parameters. Full fine-tuning of the same linear layer
+      takes \(dk+k\) (weights plus a bias). The fraction trained is
+      \(r(d+k)/(dk+k)\), and the reduction factor is \((dk+k)/(r(d+k))\).
+    </p>
+
+    <p>
+      <strong>Worked example — \(d=k=768,\ r=8\), by hand.</strong>
+      First, \(d+k=768+768=1536\). Multiply by the rank:
+      \(r(d+k)=8\times1536=12{,}288\) trainable parameters for one adapter.
+      Full fine-tuning of that layer needs \(dk+k=768\times768+768=589{,}824+768=590{,}592\) parameters.
+      The fraction is \(12{,}288/590{,}592=0.020806\approx2.08\%\), i.e. roughly 48× fewer trainable
+      numbers (exactly 48.0625× from the same division). This is arithmetic on a synthetic layer,
+      not a count for any released checkpoint.
+    </p>
+
+    <h3 id="scale">3 · Rank and scaling</h3>
+
+    <p>
+      The rank \(r\) is a budget knob: larger \(r\) increases capacity and trainable count linearly.
+      The scale \(\alpha/r\) keeps the update's magnitude roughly stable as \(r\) changes. If you
+      double \(r\) and keep \(\alpha\) fixed, the number of trainable parameters roughly doubles
+      while each update is halved before scaling.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> With \(\alpha=16\), \(r=8\) gives \(\alpha/r=2\). Doubling to
+      \(r=16\) yields \(\alpha/r=1\) and \(16(768+768)=24{,}576\) trainable parameters — exactly
+      twice the 12,288 from the \(r=8\) case. If \(\alpha\) were also doubled to 32, the scale would
+      return to 2.
+    </p>
+
+    <h3 id="adaptermath">4 · Adapter total across modules</h3>
+
+    <p>
+      If \(m\) layers are targeted, multiply both counts by \(m\):
+      \(N_{\text{LoRA}}=m\,r(d+k)\) and \(N_{\text{full}}=m(dk+k)\). Only the percentages stay the
+      same across \(m\) when all modules share a shape.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> For a synthetic profile with \(m=12\) identical
+      \(d=k=768\) layers and \(r=8\), the adapter trains \(12\times12{,}288=147{,}456\) parameters,
+      while full fine-tuning would train \(12\times590{,}592=7{,}087{,}104\). Their ratio is still
+      48.0625×. The lab's other profiles repeat the same arithmetic with different synthetic
+      shapes; none of them is a published model size.
+    </p>
+
+    <h2 id="lab">Lab</h2>
+
+    <h3 id="lab-lora">LoRA budget calculator</h3>
+    <p>
+      Choose a synthetic shape profile and a rank. The bar chart compares full fine-tuning against
+      the LoRA adapter; the table prints \(r(d+k)\), the full-layer count, the number of targeted
+      modules, the totals and the reduction factor. Every value is computed from the profile's
+      stated \(d\), \(k\), \(m\) and the rank slider — start at profile B with \(r=8\) to reproduce
+      the 12,288 calculation above.
+    </p>
+
+    <section class="lab" data-widget="m4-05-lora-budget" data-badge="exact"
+             data-title="LoRA vs full fine-tuning parameter budget"
+             data-note="Exact: r(d+k) and (dk+k) arithmetic for synthetic shape profiles, with bars, totals and percent trainable computed from the selected d, k, m and r.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      First the pretrained workflow in PyTorch: a pipeline for a quick check, then PEFT's
+      <code>LoraConfig</code> and <code>get_peft_model</code> with a printed trainable-parameter
+      count. The second listing shows how to target specific modules and merge the adapter at
+      export. No checkpoint is downloaded at build time — run these in Colab with your own model id.
+      Shapes are \((N,T)\) token ids and \((N,C)\) logits; for image checkpoints the convention is
+      NCHW.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch / Hugging Face</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">PEFT details</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+from peft import LoraConfig, get_peft_model, TaskType
+import torch
+
+# 1) Quick pretrained check (choose a checkpoint before running).
+clf = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+print(clf("This lesson is clear."))          # list of {"label": ..., "score": ...}
+
+# 2) Adapt a checkpoint to your own 2-class task.
+name = "distilbert-base-uncased"
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForSequenceClassification.from_pretrained(name, num_labels=2)
+# input_ids: (N, T); attention_mask: (N, T); logits: (N, C=2)
+
+config = LoraConfig(
+    task_type=TaskType.SEQ_CLS,
+    r=8,                 # rank: the 12,288-per-module case for d=k=768
+    lora_alpha=16,       # alpha/r = 2
+    lora_dropout=0.05,
+    target_modules=["q_lin", "v_lin"],   # names depend on the checkpoint
+)
+model = get_peft_model(model, config)
+model.print_trainable_params()             # exact printed count for your checkpoint
+
+batch = tok(["first sentence", "second sentence"], padding=True,
+            truncation=True, return_tensors="pt")
+with torch.no_grad():
+    logits = model(**batch).logits          # (N=2, C=2), pre-softmax
+print(tuple(logits.shape))</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>from peft import LoraConfig, get_peft_model, TaskType
+
+# Target modules must be the linear projections inside attention/FFN blocks.
+cfg = LoraConfig(task_type=TaskType.SEQ_CLS, r=8, lora_alpha=16,
+                 target_modules=["query", "value"])   # example names
+
+peft_model = get_peft_model(base_model, cfg)
+for n, p in peft_model.named_parameters():
+    if p.requires_grad:
+        pass                    # only A and B matrices appear here
+
+n_train = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
+n_total = sum(p.numel() for p in peft_model.parameters())
+print("trainable", n_train, "total", n_total,
+      "percent", round(100 * n_train / n_total, 4))
+
+# Export: merge the adapter into the base weights before deployment.
+merged = peft_model.merge_and_unload()
+merged.save_pretrained("./merged")          # no adapter needed at inference
+tok.save_pretrained("./merged")             # keep the matching tokenizer
+# Note: generation also needs model.config.pad_token_id set correctly.</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      The counts printed by <code>print_trainable_params()</code> come from the actual checkpoint you
+      load; our worked 12,288 is peradapter arithmetic at \(d=k=768, r=8\) on a synthetic layer.
+      LoRA is not automatically better than full fine-tuning on every task — it is a budget and
+      deployment trade-off that you should measure on your own validation set.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Wrong padding side for generation</p>
+        <p>
+          Encoder models usually pad on the right; decoder-only generation usually needs left
+          padding so the final token of every sequence sits at the same index. A wrong
+          <code>tokenizer.padding_side</code> makes batched generation misalign its predictions.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Missing pad_token_id</p>
+        <p>
+          If the tokenizer has no pad token, set it explicitly (often to the EOS token) and make
+          sure <code>model.config.pad_token_id</code> matches. Otherwise generation can sample the
+          pad id or warn on every batch.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">LoRA on the wrong modules</p>
+        <p>
+          Parameter names differ across checkpoints (<code>q_lin</code>, <code>query</code>, …).
+          A target_modules list that matches nothing trains zero parameters and silently leaves the
+          model unchanged. Print the trainable count after wrapping.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Adapter not merged at export</p>
+        <p>
+          Serving code that loads only the base checkpoint ignores an unmerged adapter. Either ship
+          the adapter with the PEFT loader or call <code>merge_and_unload()</code> and save both the
+          merged weights and the matching tokenizer.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “LoRA training runs but the loss stays flat and the trainable count prints 0.”
+      The configuration looks reasonable except for one line:
+    </p>
+
+<pre class="code" data-lang="python"><code>cfg = LoraConfig(task_type=TaskType.SEQ_CLS, r=8, lora_alpha=16,
+                 target_modules=["q_proj"])   # BUG: this checkpoint calls it "query"
+model = get_peft_model(model, cfg)
+model.print_trainable_params()               # prints 0</code></pre>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        A parameter name that does not exist in the checkpoint selects no modules, so no \(A\) or
+        \(B\) matrices are created and nothing can learn. Inspect the real names with
+        <code>[n for n, _ in model.named_modules()]</code>, choose the exact attention projections,
+        and print the trainable count again. A related bug is freezing the wrong tensors:
+        <code>requires_grad=True</code> must hold for the adapter parameters. If the count is small
+        but nonzero and the loss is still flat, check that the head is also trainable and that the
+        learning rate is not far too small.
+      </p>
+      <p class="small muted">
+        Quick detector: after wrapping, assert <code>any(p.requires_grad for p in model.parameters())</code>
+        and record <code>print_trainable_params()</code> in the training log before the first step.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m4-05">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — Hugging Face and LoRA",
+        "questions": [
+          {
+            "q": "What does a Hugging Face checkpoint provide that a tokenizer does not?",
+            "options": ["Token ids and attention masks", "Pretrained model weights and configuration", "The train/validation split", "The learning-rate schedule"],
+            "correct": 1,
+            "why": [
+              "Those come from the tokenizer.",
+              "Correct: the checkpoint holds the weights and config; the tokenizer maps text to ids.",
+              "Data splits are your responsibility.",
+              "The optimiser schedule is chosen in training code."
+            ]
+          },
+          {
+            "q": "LoRA replaces (or augments) a weight update with…",
+            "options": ["A full d×k matrix", "A product BA with inner dimension r", "A diagonal matrix of size d", "A new tokenizer"],
+            "correct": 1,
+            "why": [
+              "That is full fine-tuning.",
+              "Correct: ΔW = BA with B (d×r) and A (r×k), so rank ≤ r.",
+              "A diagonal update would have d parameters but a different structure.",
+              "The tokenizer is unchanged by LoRA."
+            ]
+          },
+          {
+            "q": "For d = k = 768 and r = 8, the trainable parameters per LoRA module are…",
+            "options": ["6,144", "12,288", "590,592", "24,576"],
+            "correct": 1,
+            "why": [
+              "That is only d·r; the r·k part is missing.",
+              "Correct: 8 × (768 + 768) = 8 × 1536 = 12,288.",
+              "That is the full layer count dk + k, not the adapter.",
+              "That is the count for r = 16."
+            ]
+          },
+          {
+            "q": "Full fine-tuning of that same d = k = 768 layer needs…",
+            "options": ["589,824 parameters", "590,592 parameters", "12,288 parameters", "768 parameters"],
+            "correct": 1,
+            "why": [
+              "That is the weight count without the 768 biases.",
+              "Correct: dk + k = 768·768 + 768 = 590,592.",
+              "That is the LoRA adapter count.",
+              "That counts only the bias vector."
+            ]
+          },
+          {
+            "q": "With α = 16 and r = 8, the LoRA scaling factor α/r is…",
+            "options": ["0.5", "1", "2", "16"],
+            "correct": 2,
+            "why": [
+              "That would be r/α.",
+              "That is the scale if α equaled r.",
+              "Correct: 16/8 = 2.",
+              "That is α alone, before dividing by r."
+            ]
+          },
+          {
+            "q": "Why is B initialised to zeros in a typical LoRA setup?",
+            "options": ["To make rank(B) zero forever", "So the adapter starts as the identity update and training begins from the pretrained model", "To save memory at inference", "To remove the need for a bias term"],
+            "correct": 1,
+            "why": [
+              "B is trained and becomes nonzero; only the starting update is zero.",
+              "Correct: BA = 0 initially, so W' = W at step 0.",
+              "Memory saving comes from storing fewer parameters, not from zeros.",
+              "Bias handling is independent of LoRA initialisation."
+            ]
+          },
+          {
+            "q": "Which architecture is the natural fit for open-ended text continuation?",
+            "options": ["Encoder-only", "Causal decoder", "Autoencoder", "Convolutional classifier"],
+            "correct": 1,
+            "why": [
+              "An encoder sees the full input and is not built for left-to-right generation.",
+              "Correct: a causal decoder factorises the next token given the prefix.",
+              "An autoencoder reconstructs inputs; it is not a text generator by default.",
+              "A classifier emits labels, not sequences."
+            ]
+          },
+          {
+            "q": "print_trainable_params() reports 0 after get_peft_model. What is most likely wrong?",
+            "options": ["The rank r is too large", "target_modules names do not match the checkpoint", "The tokenizer is cased", "The batch size is too small"],
+            "correct": 1,
+            "why": [
+              "A larger rank would increase the count, not zero it.",
+              "Correct: no matching modules means no A/B matrices are created.",
+              "Casing affects ids, not parameter creation.",
+              "Batch size has no effect on parameter counts."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · A pretrained checkpoint supplies weights and config; a matching tokenizer supplies ids and masks, and a small head turns hidden states into task predictions.<br>
+        2 · LoRA freezes \(\mathbf W\) and trains \(\mathbf B\mathbf A\): with \(d=k=768,r=8\), \(r(d+k)=8(768+768)=12{,}288\) parameters versus \(dk+k=590{,}592\) for full fine-tuning — about 2.08%.<br>
+        3 · Match the architecture to the task shape, set padding and pad ids correctly, target real module names, and merge the adapter before export.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m4-05">
+      <h2>Cheat sheet — M4·05</h2>
+      <ul>
+        <li>\(W'=W+\frac{\alpha}{r}BA\), \(B\in\mathbb R^{d\times r}\), \(A\in\mathbb R^{r\times k}\); rank(BA) ≤ r.</li>
+        <li>Trainable count \(r(d+k)\). Worked: d=k=768, r=8 → 8×1536 = 12,288.</li>
+        <li>Full layer count \(dk+k\) = 589,824 + 768 = 590,592; 12,288/590,592 ≈ 2.08% (≈48× fewer).</li>
+        <li>With m targeted modules, multiply both counts by m; percentages are unchanged for identical shapes.</li>
+        <li>Scale α/r: α=16, r=8 → 2; α=16, r=16 → 1 with 24,576 trainable parameters.</li>
+        <li>Checks: matching target_modules, nonzero trainable count, left padding for generation, merged adapter at export.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Hu, E. J. — <em>LoRA: Low-Rank Adaptation of Large Language Models</em> (2021).</li>
+      <li>Wolf, T. — <em>HuggingFace's Transformers: State-of-the-art Natural Language Processing</em> (2020).</li>
+      <li>Houlsby, N. — <em>Parameter-Efficient Transfer Learning for NLP</em> (2019).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m4-04-gpt-and-decoding.html">← Previous: GPT and decoding</a>
+      <a href="index.html">Module overview →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M4 Autoencoders</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m4-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

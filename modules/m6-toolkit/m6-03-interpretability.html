@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Saliency and Grad-CAM · DeepLearn Lab</title>
+<meta name="description" content="Compute pixel saliency by backpropagating through a real scorer, then compare absolute, signed and SmoothGrad maps and learn where attribution lies.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m6" data-lesson="m6-03" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="index.html" aria-current="page">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 6 · Advanced toolkit</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M6 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m6-03">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M6 Advanced toolkit</a> / <span>Interpretability</span>
+    </nav>
+
+    <h1>Saliency and Grad-CAM</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 3 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Feature importance for trees has an image analogue: which pixels changed the class score most?
+      You can compute that map exactly, and also see exactly how easy it is to misread it.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Compute a saliency map from gradients of a class score with respect to input pixels.</li>
+        <li>Distinguish absolute from signed saliency and explain SmoothGrad's averaging.</li>
+        <li>State the Grad-CAM formula and the role of gradient global average pooling.</li>
+        <li>List the sanity checks that separate real evidence from pretty noise.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        A tree model tells you a feature's importance by how much the split loss improves. For an
+        image classifier the analogous question is "how much would this pixel's brightness have to
+        change to move the class score?" Backpropagation answers it in one pass — with no
+        perturb-and-retest loop per pixel.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a first-order sensitivity map</h2>
+
+    <p>
+      Take the score \(y^c\) of class \(c\) — a logit, before softmax. A one-unit change in pixel
+      \(x_{i,j}\) changes the score by roughly \(\partial y^c/\partial x_{i,j}\). That derivative is
+      cheap because autograd already computes a gradient with respect to the input if we ask for
+      it. Absolute saliency answers "how much"; signed saliency answers "in which direction": a
+      positive derivative means brightening the pixel raises the score, a negative one means
+      brightening lowers it.
+    </p>
+
+    <p>
+      The caveat is first-order: the derivative at the current image says nothing about large
+      changes. Saliency can highlight a single noisy pixel that happens to have a large local
+      slope. Grad-CAM trades pixel resolution for stability by asking which <em>channels</em> in a
+      late convolution layer matter, then upsampling the channel-weighted map.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        A heatmap is a derivative, not an explanation by itself. Trust it only after checking that
+        it changes when the label changes and vanishes when the model's weights are randomised.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="saliency">1 · Input saliency</h3>
+
+    \[ S_{i,j} = \left|\frac{\partial y^c}{\partial x_{i,j}}\right|,
+       \qquad S^{\text{signed}}_{i,j} = \frac{\partial y^c}{\partial x_{i,j}} \]
+
+    <p>
+      Here \(y^c\) is the \(c\)-th logit and \(x_{i,j}\) the input pixel at row \(i\), column \(j\).
+      In NCHW notation the image is \(\mathsf{X}\in\mathbb{R}^{1\times C\times H\times W}\), and the
+      gradient has the same shape.
+    </p>
+
+    <p>
+      <strong>Worked example on three pixels.</strong> Let
+      \(y=2x_1-3x_2+0.5x_3+1\) with \(x=(0.2,0.7,0.4)\). The score is
+      \(y=2(0.2)-3(0.7)+0.5(0.4)+1=0.4-2.1+0.2+1=-0.5\). The gradient is
+      \((\partial y/\partial x_1,\partial y/\partial x_2,\partial y/\partial x_3)=(2,-3,0.5)\);
+      absolute saliency is \((2,3,0.5)\), signed saliency is \((2,-3,0.5)\). Pixel 2 is the most
+      important by magnitude even though it pushes the score <em>down</em>.
+    </p>
+
+    <h3 id="gradcam">2 · Grad-CAM recap</h3>
+
+    \[ \alpha_k^c = \frac{1}{HW}\sum_{i=1}^{H}\sum_{j=1}^{W}
+        \frac{\partial y^c}{\partial A^k_{i,j}}\,,
+       \qquad L^c_{i,j} = \mathrm{ReLU}\!\left(\sum_k \alpha_k^c A^k_{i,j}\right) \]
+
+    <p>
+      \(A^k\) is feature map channel \(k\) of the chosen convolution layer, \(H,W\) its spatial
+      dimensions, and \(\alpha_k^c\) the global-average-pooled gradient for class \(c\). The
+      ReLU keeps only evidence that increases the score.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Two channels with \(\alpha^c=(0.5,-0.2)\). At one spatial
+      location \(A=(2,5)\): \(\sum_k\alpha_kA_k=0.5\cdot2-0.2\cdot5=1-1=0\), so \(L^c=0\). At a
+      location with \(A=(4,5)\): \(0.5\cdot4-0.2\cdot5=2-1=1\), so \(L^c=1\). The negative channel
+      cancels the positive one only where it is strong.
+    </p>
+
+    <h3 id="smooth">3 · SmoothGrad</h3>
+
+    \[ S_{\text{SG}}(x)=\frac{1}{K}\sum_{k=1}^{K}
+       \left|\frac{\partial y^c}{\partial x}\Big|_{x+\varepsilon_k}\right|,
+       \qquad \varepsilon_k\sim\mathcal{N}(0,\sigma^2 I) \]
+
+    <p>
+      \(K\) is the number of noisy copies, \(\varepsilon_k\) is Gaussian pixel noise with standard
+      deviation \(\sigma\), and the absolute value is taken before averaging in this course's
+      implementation. Smoothing removes isolated single-pixel spikes while keeping broad regions
+      whose gradient survives perturbation.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> At one pixel, three noisy copies give saliencies \(2.8, 3.2,
+      2.9\). Then \(S_{\text{SG}}=(2.8+3.2+2.9)/3=8.9/3=2.967\), compared with the clean value
+      \(3.0\). A pixel whose gradient jumps from \(0\) to \(5\) under tiny noise would average near
+      \(2\) — it is not reliably important.
+    </p>
+
+    <h2 id="lab">Lab: saliency on an editable image</h2>
+
+    <p>
+      This widget owns a 6×6 image and owns its scorer's weights — a linear scorer or a 3×3
+      convolution plus ReLU. Click or use the arrow and <kbd>+</kbd>/<kbd>−</kbd> keys on the image
+      to change a pixel; every heatmap cell is the gradient computed by backpropagating through
+      those exact weights. The SmoothGrad toggle perturbs with a fixed seeded RNG, so the same
+      image always produces the same map.
+    </p>
+
+    <section class="lab" data-widget="m6-03-saliency" data-badge="exact"
+             data-title="Live saliency from real gradients"
+             data-note="Exact: y and every heatmap cell are computed by a forward pass and hand-coded backward pass through the widget's own scorer weights; SmoothGrad uses a seeded noise generator.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      In an ordinary PyTorch model you get the same map by calling
+      <code>out.backward()</code> on the class logit and reading <code>input.grad</code>. The lab
+      implements the two small backward rules explicitly so nothing is hidden: linear
+      \(\partial y/\partial x=W\), and ReLU-conv \(\partial y/\partial x_{i,j}=\sum_{\text{active patches}}W_{u,v}\).
+    </p>
+
+    <h2 id="code">Code: hooks for saliency and Grad-CAM</h2>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+model = nn.Sequential(
+    nn.Conv2d(3, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+    nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool2d((4, 4)),
+    nn.Flatten(), nn.Linear(32 * 4 * 4, 10),
+)
+model.eval()                              # disable dropout and use population BN stats
+x = torch.randn(1, 3, 64, 64, requires_grad=True)   # (N, C, H, W)
+score = model(x)[0, 3]                    # logit of class 3, NOT softmax probability
+score.backward()
+saliency = x.grad.abs()[0].sum(dim=0)     # (H, W): collapse channels, take magnitude
+print("image", tuple(x.shape), "saliency", tuple(saliency.shape))
+
+# ---- Grad-CAM on the last convolution layer -------------------------------
+activations, grads = [], []
+def fwd_hook(module, inp, out):
+    activations.append(out.detach())      # (1, 32, 4, 4)
+def bwd_hook(module, gin, gout):
+    grads.append(gout[0].detach())        # (1, 32, 4, 4)
+
+handle_f = model[4].register_forward_hook(fwd_hook)
+handle_b = model[4].register_backward_hook(bwd_hook)
+score.backward(retain_graph=True)
+alpha = grads[0].mean(dim=(2, 3), keepdim=True)      # (1, 32, 1, 1)
+cam = torch.relu((alpha * activations[0]).sum(dim=1))  # (1, 4, 4)
+cam = torch.nn.functional.interpolate(cam.unsqueeze(1), size=(64, 64),
+                                      mode="bilinear", align_corners=False)
+print("cam", tuple(cam.shape))            # (1, 1, 64, 64)
+handle_f.remove(); handle_b.remove()
+
+# ---- SmoothGrad: K perturbed backward passes ------------------------------
+K, sigma = 8, 0.15
+acc = torch.zeros_like(saliency)
+for _ in range(K):
+    xp = (x.detach() + sigma * torch.randn_like(x)).requires_grad_(True)
+    model(xp)[0, 3].backward()
+    acc += xp.grad.abs()[0].sum(dim=0) / K
+print("smoothgrad", tuple(acc.shape))</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      Use the logit, not the softmax probability: softmax couples classes, so a change in another
+      class's score would move the probability even when this class's evidence did not. Model mode
+      matters too — dropout in <code>train()</code> makes two backward passes disagree.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting <code>model.eval()</code></p>
+        <p>
+          Random dropout masks make the heatmap a function of the RNG state, not of the image.
+          Switch to eval mode before any attribution pass.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Saliency on softmax output</p>
+        <p>
+          The probability of class \(c\) depends on all logits. Use the logit \(y^c\) for a map that
+          describes evidence for that class alone.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Wrong upsampling for CAM</p>
+        <p>
+          Nearest-neighbour upsampling produces blocky boundaries; bilinear produces smooth ones.
+          State which you used — the underlying \(4\times4\) map is the actual result.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Over-interpreting noise</p>
+        <p>
+          A sharp single-pixel hotspot can be an adversarial direction of the local linearisation.
+          Run a label-randomisation sanity check before calling it evidence.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      Saliency is exactly zero everywhere, while the network's predictions look reasonable. The
+      input tensor was created as <code>x = preprocess(image)</code> with no further flags.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The input does not require gradients. Create it as
+        <code>x = preprocess(image).requires_grad_(True)</code> (or call
+        <code>x.requires_grad_()</code> before the forward pass), then backpropagate from the logit.
+        If a <code>with torch.no_grad()</code> block wraps the forward pass, remove that too — no
+        graph means no gradient path back to the image.
+      </p>
+      <p class="small muted">
+        Another common cause: reading <code>x.grad</code> after a second backward pass has
+        accumulated into it. Call <code>x.grad = None</code> between attribution runs.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m6-03">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — interpretability",
+        "questions": [
+          {
+            "q": "For y = 2x1 − 3x2 + 0.5x3, what is the absolute saliency vector?",
+            "options": ["(2, −3, 0.5)", "(2, 3, 0.5)", "(0.2, 0.7, 0.4)", "(−2, 3, −0.5)"],
+            "correct": 1,
+            "why": ["That is the signed gradient, not the absolute map.", "Correct: take |∂y/∂x| componentwise.", "That is the input, not the gradient.", "That flips the signs without taking magnitudes."]
+          },
+          {
+            "q": "Which quantity should you backpropagate from for a class-specific saliency map?",
+            "options": ["The softmax probability of the class", "The class logit", "The L2 norm of all logits", "The cross-entropy loss averaged over the batch"],
+            "correct": 1,
+            "why": ["Softmax couples the classes, so other logits affect the result.", "Correct: the logit isolates evidence for that class.", "That is a scalar with no class specificity.", "A batch loss mixes examples and classes."]
+          },
+          {
+            "q": "Three SmoothGrad samples at one pixel give 2.8, 3.2, 2.9. What is the smoothed saliency?",
+            "options": ["3.2", "2.9", "2.967", "8.9"],
+            "correct": 2,
+            "why": ["That is the maximum sample, not the average.", "That is the median.", "Correct: (2.8+3.2+2.9)/3 = 2.967.", "That is the sum, missing the division by K."]
+          },
+          {
+            "q": "In Grad-CAM, what is alpha_k^c?",
+            "options": ["The max value of channel k", "The global average of the gradient of score c with respect to channel k", "The upsampled heatmap", "The softmax probability"],
+            "correct": 1,
+            "why": ["Grad-CAM averages gradients, not activations, over space.", "Correct: it is the global-average-pooled gradient for that channel and class.", "That is the final localisation map L^c.", "Those are unrelated quantities."]
+          },
+          {
+            "q": "Why switch a model to eval mode before attribution?",
+            "options": ["It increases resolution", "It disables dropout and uses population batch-norm statistics", "It makes gradients larger", "It removes the need for a backward pass"],
+            "correct": 1,
+            "why": ["Mode does not change spatial resolution.", "Correct: random train-mode behaviour makes maps non-reproducible.", "Magnitude is not the reason.", "Backpropagation is still required."]
+          },
+          {
+            "q": "A saliency map is unchanged after randomising all model weights. What does that suggest?",
+            "options": ["The model is very robust", "The map is probably an artefact and fails a sanity check", "The input needs normalisation", "SmoothGrad would fix it"],
+            "correct": 1,
+            "why": ["A real explanation should depend on learned parameters.", "Correct: label- and weight-randomisation are standard sanity checks.", "Normalisation is not the explanation for this symptom.", "Averaging noise cannot create missing class sensitivity."]
+          },
+          {
+            "q": "A linear scorer has weights (2, −3, 0.5). What is ∂y/∂x at every image?",
+            "options": ["The input pixels", "The weights themselves", "Zero until the score is positive", "The softmax probabilities"],
+            "correct": 1,
+            "why": ["That is x, not the derivative of w·x.", "Correct: the derivative of a linear form is its weight vector.", "Linearity has no threshold.", "Softmax is unrelated to a linear scorer."]
+          },
+          {
+            "q": "Signed saliency is useful because it tells you…",
+            "options": ["The magnitude only", "Whether brightening the pixel raises or lowers the score", "The class with the highest probability", "The image's file size"],
+            "correct": 1,
+            "why": ["That is absolute saliency's job.", "Correct: the sign is the direction of the local effect.", "That is a prediction, not a derivative.", "File size is unrelated."]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Saliency is \(|∂y^c/∂x|\): for \(y=2x_1-3x_2+0.5x_3\) the map is \((2,3,0.5)\).<br>
+        2 · SmoothGrad averages absolute gradients over noisy copies; \((2.8+3.2+2.9)/3=2.967\) at one pixel.<br>
+        3 · Grad-CAM weights late feature maps by pooled gradients; check eval mode, use logits, and randomise labels as a sanity test.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m6-03">
+      <h2>Cheat sheet — M6·03</h2>
+      <ul>
+        <li>\(S_{ij}=|\partial y^c/\partial x_{ij}|\); signed map keeps the sign.</li>
+        <li>SmoothGrad: \(S_{\text{SG}}=\frac1K\sum_k|\partial y^c/\partial(x+\varepsilon_k)|\).</li>
+        <li>Grad-CAM: \(\alpha_k^c=\frac{1}{HW}\sum_{ij}\partial y^c/\partial A^k_{ij}\); \(L^c=\mathrm{ReLU}(\sum_k\alpha_k^cA^k)\).</li>
+        <li>Use logits, <code>model.eval()</code>, and state the upsampling mode.</li>
+        <li>Sanity checks: random labels, random weights, compare classes.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Simonyan, K. — <em>Deep Inside Convolutional Networks: Visualising Image Classification Models and Saliency Maps</em> (2014).</li>
+      <li>Selvaraju, R. — <em>Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization</em> (2017).</li>
+      <li>Smilkov, D. — <em>SmoothGrad: Removing Noise by Adding Noise</em> (2017).</li>
+      <li>Adebayo, J. — <em>Sanity Checks for Saliency Maps</em> (2018).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m6-02-performance.html">← Previous: performance</a>
+      <a href="m6-04-deployment.html">Next: deployment →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M6 Advanced toolkit</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m6-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

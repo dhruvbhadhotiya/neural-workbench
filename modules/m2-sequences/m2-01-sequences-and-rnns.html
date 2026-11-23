@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sequences and recurrent networks · DeepLearn Lab</title>
+<meta name="description" content="Why order matters, how to write the RNN recurrence, unroll it over time, and count its shared parameters — with a live three-step numeric trace.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m2" data-lesson="m2-01" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="index.html" aria-current="page">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 2 · Sequences &amp; NLP</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M2 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m2-01">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M2 Sequences &amp; NLP</a> / <span>Sequences &amp; RNNs</span>
+    </nav>
+
+    <h1>Sequences and recurrent networks</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 1 of 7 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      A sentence is not a bag of rows: token 7 depends on tokens 1–6. The recurrent network is the
+      simplest machine that carries that dependence forward — one small matrix, reused at every step.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Write the RNN recurrence and evaluate it by hand for two timesteps.</li>
+        <li>Unroll the recurrence into a chain and explain what is shared across steps.</li>
+        <li>Count the parameters: \(D H + H^2 + H\).</li>
+        <li>Distinguish many-to-one from many-to-many, and explain why flattening a sequence fails.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        A table model treats every row as independent: the same feature vector gets the same
+        prediction regardless of its neighbours. A sentence violates that assumption — “not good”
+        and “good” share a word but not a meaning. The RNN adds a <strong>state</strong> \(\mathbf{h}_t\)
+        that summarizes everything read so far, and passes it to the next token.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: one memory, passed forward</h2>
+
+    <p>
+      Imagine reading a sentence one word at a time while keeping a single notebook. For each new
+      word you update the notebook using two things: the word itself and the previous note. The
+      notebook after token \(t\) is the hidden state \(\mathbf{h}_t\in\mathbb{R}^{H_{hidden}}\).
+      Crucially, the <em>same</em> update rule — the same weights — is applied at every position.
+      That is <strong>parameter sharing over time</strong>: a 10-token sentence and a 100-token
+      sentence use the same \(D H + H^2 + H\) numbers.
+    </p>
+
+    <p>
+      Unrolling means drawing the same cell \(T\) times with different inputs. The chain has \(T\)
+      boxes but only one set of weights; backpropagation later travels back along that chain
+      (lesson 02). The state at the end is a learned summary of the whole prefix, which is why a
+      classifier can read the last state and emit one label.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Recurrence = apply one fixed function again and again. Depth comes from the sequence
+        length \(T\), not from stacking layers, and it costs no extra parameters.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="symbols">0 · Symbols</h3>
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <ul>
+        <li>\(T\): sequence length; \(D = D_{in}\): input width; \(H = H_{hidden}\): hidden width.</li>
+        <li>\(\mathbf{x}_t\in\mathbb{R}^{D}\): input vector at position \(t\); \(\mathbf{h}_t\in\mathbb{R}^{H}\): hidden state after reading it; \(\mathbf{h}_0 = \mathbf{0}\) unless initialized otherwise.</li>
+        <li>\(\mathbf{W}_{xh}\in\mathbb{R}^{D\times H}\): input→hidden matrix; \(\mathbf{W}_{hh}\in\mathbb{R}^{H\times H}\): hidden→hidden matrix; \(\mathbf{b}_h\in\mathbb{R}^{H}\): hidden bias.</li>
+        <li>\(\phi\): nonlinearity (here \(\tanh\)); \(\theta\): all trainable parameters; \(\mathcal{L}\): scalar loss.</li>
+      </ul>
+    </aside>
+
+    <h3 id="recurrence">1 · The recurrence</h3>
+
+    \[ \mathbf{h}_t = \phi\!\left(\mathbf{x}_t \mathbf{W}_{xh} + \mathbf{h}_{t-1}\mathbf{W}_{hh} + \mathbf{b}_h\right), \qquad \phi = \tanh \]
+
+    <p>
+      Row-vector convention: \(\mathbf{x}_t\) is \(1\times D\), so \(\mathbf{x}_t\mathbf{W}_{xh}\) is
+      \(1\times H\), \(\mathbf{h}_{t-1}\mathbf{W}_{hh}\) is \(1\times H\), and the sum has shape
+      \((1,H)\) before the elementwise tanh. (NOTATION.md §7 uses this same shape convention.)
+    </p>
+
+    <p><strong>Worked example.</strong> Take \(D=2\), \(H=2\), \(\mathbf{h}_0=(0,0)\), and</p>
+
+    \[ \mathbf{W}_{xh}=\begin{bmatrix}0.5&-0.2\\0.3&0.4\end{bmatrix},\quad
+       \mathbf{W}_{hh}=\begin{bmatrix}0.6&0.1\\-0.1&0.5\end{bmatrix},\quad
+       \mathbf{b}_h=(0.1,-0.1) \]
+
+    <p>With \(\mathbf{x}_1=(1,0)\):</p>
+
+    \[ \mathbf{x}_1\mathbf{W}_{xh}=(0.5,-0.2),\qquad \mathbf{h}_0\mathbf{W}_{hh}=(0,0) \]
+    \[ \mathbf{z}_1=(0.5+0+0.1,\;-0.2+0-0.1)=(0.6,-0.3) \]
+    \[ \mathbf{h}_1=(\tanh 0.6,\;\tanh(-0.3))=(0.5370,\;-0.2913) \]
+
+    <p>With \(\mathbf{x}_2=(0,1)\) and the just-computed \(\mathbf{h}_1\):</p>
+
+    \[ \mathbf{x}_2\mathbf{W}_{xh}=(0.3,0.4),\qquad
+       \mathbf{h}_1\mathbf{W}_{hh}=(0.5370\cdot0.6+(-0.2913)(-0.1),\;0.5370\cdot0.1+(-0.2913)(0.5))=(0.3513,-0.0919) \]
+    \[ \mathbf{z}_2=(0.3+0.3513+0.1,\;0.4-0.0919-0.1)=(0.7513,0.2081) \]
+    \[ \mathbf{h}_2=(\tanh 0.7513,\;\tanh 0.2081)=(0.6355,\;0.2051) \]
+
+    <p>
+      The first coordinate of \(\mathbf{h}_2\) carries information from both \(\mathbf{x}_1\)
+      (through \(\mathbf{h}_1\)) and \(\mathbf{x}_2\). That is the whole point of the state.
+    </p>
+
+    <h3 id="unroll">2 · Unrolling the graph</h3>
+
+    \[ \mathbf{h}_3 = \phi\!\left(\mathbf{x}_3\mathbf{W}_{xh} + \phi\!\left(\mathbf{x}_2\mathbf{W}_{xh} + \phi\!\left(\mathbf{x}_1\mathbf{W}_{xh}+\mathbf{h}_0\mathbf{W}_{hh}+\mathbf{b}_h\right)\mathbf{W}_{hh}+\mathbf{b}_h\right)\mathbf{W}_{hh}+\mathbf{b}_h\right) \]
+
+    <p>
+      Written out, the recurrence looks nested — but an implementation is a three-line loop, and
+      every box in the chain uses the identical \(\mathbf{W}_{xh},\mathbf{W}_{hh},\mathbf{b}_h\).
+      The lab below steps through exactly the matrices used above.
+    </p>
+
+    <section class="lab" data-widget="m2-01-rnn-unroll" data-badge="exact"
+             data-title="Three-step RNN unroll"
+             data-note="Exact: each hidden state is computed from the displayed W_xh, W_hh and b_h with DL.tensor.matmul and Math.tanh. The same matrices are used at every step.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="params">3 · Parameter count</h3>
+
+    \[ |\theta| = \underbrace{D H}_{\mathbf{W}_{xh}} + \underbrace{H^2}_{\mathbf{W}_{hh}} + \underbrace{H}_{\mathbf{b}_h} = D H + H^2 + H \]
+
+    <p>
+      Worked: for \(D=2,H=2\), \(2\cdot2+2^2+2=4+4+2=10\). For \(D=3,H=4\),
+      \(3\cdot4+4^2+4=12+16+4=32\). The count does <em>not</em> depend on \(T\): a 5-token and a
+      500-token sequence use the same 32 numbers. This is why RNNs generalize across lengths
+      (within reason) and why flattening is so wasteful.
+    </p>
+
+    <h3 id="modes">4 · Reading patterns</h3>
+
+    <table class="shape-table">
+      <caption>Common ways to use the same recurrence</caption>
+      <thead><tr><th>Pattern</th><th>Outputs</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td>many-to-one</td><td>one vector from the last \(\mathbf{h}_T\)</td><td>sentence sentiment</td></tr>
+        <tr><td>many-to-many (aligned)</td><td>one output per token, \(\mathbf{o}_t = g(\mathbf{h}_t)\)</td><td>part-of-speech tagging</td></tr>
+        <tr><td>many-to-many (encoder–decoder)</td><td>decode after reading the whole input</td><td>machine translation</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Why not flatten the \(T\) tokens into one \(TD\)-vector? A linear layer would need
+      \(TD\cdot H\) weights that change when \(T\) changes, it would assign a different weight to
+      every position, and it would discard which token came first. The recurrence keeps one weight
+      per role and lets position live in the state.
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      PyTorch's <code>nn.RNN</code> implements the recurrence above. With
+      <code>batch_first=True</code> the input is \((N,T,D)\); without it, PyTorch expects
+      \((T,N,D)\). The manual loop below uses the same numbers and prints matching states.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+torch.manual_seed(0)
+
+D, H, T, N = 2, 2, 3, 1
+x = torch.tensor([[[1., 0.], [0., 1.], [1., 1.]]])   # (N, T, D) = (1, 3, 2)
+rnn = nn.RNN(input_size=D, hidden_size=H, batch_first=True, nonlinearity="tanh")
+
+out, h_n = rnn(x)        # out: (1, 3, 2);  h_n: (1, 1, 2)
+print(out.shape, h_n.shape)
+print("last hidden:", h_n[0, 0].tolist())
+print("out[-1] == h_n:", torch.allclose(out[:, -1], h_n[:, 0]))
+
+# Same recurrence by hand, with PyTorch's actual trained-in weights.
+W_xh = rnn.weight_ih_l0.T       # (D, H)
+W_hh = rnn.weight_hh_l0.T       # (H, H)
+b_h  = rnn.bias_ih_l0 + rnn.bias_hh_l0
+h = torch.zeros(N, H)
+for t in range(T):
+    h = torch.tanh(x[:, t] @ W_xh + h @ W_hh + b_h)
+    print(t, h[0].tolist())
+print("manual == library:", torch.allclose(h, h_n[0]))
+
+print("parameters:", sum(p.numel() for p in rnn.parameters()))  # 10</code></pre>
+      </div>
+    </div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title"><code>batch_first</code> confusion</p>
+        <p>
+          PyTorch defaults to \((T,N,D)\). If your input is \((N,T,D)\) and you forgot
+          <code>batch_first=True</code>, the layer still runs — it just interprets batch as time.
+          Print shapes before training.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">State leaks between sequences</p>
+        <p>
+          <code>h</code> carries across batches if you reuse it without re-initializing or
+          detaching. Start each independent sequence from zeros; detach when truncating so
+          backprop stops at the chunk boundary.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Padding read as content</p>
+        <p>
+          Appending pad tokens makes the state wander. Use <code>pack_padded_sequence</code> or a
+          mask so padded positions do not update the state, especially for right-padded batches.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Flattening the sequence</p>
+        <p>
+          A flattened \(TD\)-vector makes the parameter count grow with \(T\) and destroys
+          weight sharing. If the order matters, use a recurrence (or attention) instead.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “my hidden state gets huge over training batches and the loss explodes,
+      even though individual sequences are short.” The training loop is the code above with one
+      line changed.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The hidden state was created once outside the batch loop and passed back in on the next
+        iteration: <code>h = torch.zeros(N, H)</code> sits above the loop instead of inside it.
+        Move initialization inside each sequence (or call <code>h.detach()</code> after each
+        chunk when using truncated BPTT). The state then starts from zero for every example
+        instead of accumulating across unrelated sentences.
+      </p>
+      <p class="small muted">
+        Second most likely: shapes are \((N,T,D)\) while the model is in default
+        <code>batch_first=False</code> mode. Print <code>x.shape</code> and
+        <code>h.shape</code> first.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m2-01">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — sequences and RNNs",
+        "questions": [
+          {
+            "q": "What does the hidden state h_t of a vanilla RNN contain?",
+            "options": [
+              "Only the current input x_t",
+              "A learned summary of the inputs read up to and including t",
+              "The target label for token t",
+              "A copy of every previous input vector"
+            ],
+            "correct": 1,
+            "why": [
+              "The current input alone is the input x_t, not the state.",
+              "Correct: h_t is updated from x_t and h_{t-1}, so it carries prefix information.",
+              "Labels are used by the loss, not stored in the recurrence.",
+              "It is a fixed-width vector, not a growing list of past inputs."
+            ]
+          },
+          {
+            "q": "A vanilla RNN with D_in = 3 and H_hidden = 4 has how many parameters?",
+            "options": ["12", "28", "32", "48"],
+            "correct": 2,
+            "why": [
+              "That counts only W_xh.",
+              "That omits the 4 hidden biases.",
+              "Correct: D·H + H² + H = 12 + 16 + 4 = 32.",
+              "That would count an extra output projection not present in the cell."
+            ]
+          },
+          {
+            "q": "Unrolling an RNN over T steps produces…",
+            "options": [
+              "T distinct sets of weights, one per position",
+              "One cell copied T times with the same shared weights",
+              "A T-layer feedforward network with independent layers",
+              "T hidden states but no connections between them"
+            ],
+            "correct": 1,
+            "why": [
+              "Weights are shared; only the inputs and states differ.",
+              "Correct: the graph is one cell reused T times, which is what enables length generalization.",
+              "Copies share parameters, so it is not an ordinary deep stack.",
+              "Each h_t feeds the next step; the chain of connections is the point."
+            ]
+          },
+          {
+            "q": "Which recurrence matches this lesson's notation?",
+            "options": [
+              "h_t = tanh(x_t W_hh + h_{t-1} W_xh + b_h)",
+              "h_t = tanh(x_t W_xh + h_{t-1} W_hh + b_h)",
+              "h_t = x_t W_xh + h_{t-1} W_hh + b_h",
+              "h_t = tanh(h_{t-1} W_xh)"
+            ],
+            "correct": 1,
+            "why": [
+              "The two weight matrices are swapped.",
+              "Correct: input uses W_xh (D×H), previous state uses W_hh (H×H), then tanh.",
+              "The tanh nonlinearity is missing, so the recurrence is linear.",
+              "This drops the current input entirely."
+            ]
+          },
+          {
+            "q": "Why is flattening T tokens into one vector usually a bad idea?",
+            "options": [
+              "Flattened vectors cannot be stored on a GPU",
+              "It discards order and makes the weight count grow with T",
+              "Flattening always produces NaN",
+              "It forces the hidden width to equal D"
+            ],
+            "correct": 1,
+            "why": [
+              "Storage is not the issue; the representation is.",
+              "Correct: position-specific weights lose sharing and scale with T.",
+              "Nothing about flattening is numerically singular by itself.",
+              "No such constraint exists."
+            ]
+          },
+          {
+            "q": "For sentence sentiment (one label for the whole sentence), which pattern fits?",
+            "options": ["one-to-one", "many-to-one", "aligned many-to-many", "encoder–decoder"],
+            "correct": 1,
+            "why": [
+              "There are many input tokens, not one.",
+              "Correct: read T tokens, then map the final h_T to one label.",
+              "That pattern emits a label per token.",
+              "That pattern decodes a new sequence after reading the input."
+            ]
+          },
+          {
+            "q": "In PyTorch, which flag makes an RNN accept input shaped (N, T, D)?",
+            "options": ["batch_first=True", "seq_first=True", "time_major=False", "transpose=True"],
+            "correct": 0,
+            "why": [
+              "Correct: batch_first=True means batch is the first axis.",
+              "That flag does not exist.",
+              "PyTorch does not use a time_major flag.",
+              "Transposing is something you do yourself, not an nn.RNN flag."
+            ]
+          },
+          {
+            "q": "Right-padded batches are a problem for a vanilla RNN because…",
+            "options": [
+              "Pads have negative values",
+              "The state keeps updating on pad tokens and the final state is misleading",
+              "Pads change the parameter count",
+              "RNNs cannot accept unequal-length sequences at all"
+            ],
+            "correct": 1,
+            "why": [
+              "Pad values are usually zero, not negative.",
+              "Correct: h_T after padding is no longer the state after the real last token; use packing or a mask.",
+              "Parameters are fixed by D and H, not by the batch contents.",
+              "They can with padding; the issue is how padding is handled."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · The RNN applies one shared cell at every position: h_t = tanh(x_t W_xh + h_{t−1} W_hh + b_h).<br>
+        2 · Unrolling gives a T-step chain with only DH + H² + H parameters, independent of T.<br>
+        3 · The final state summarizes the prefix (many-to-one); pads must be masked or packed so they do not corrupt it.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m2-01">
+      <h2>Cheat sheet — M2·01</h2>
+      <ul>
+        <li>\(\mathbf{h}_t=\tanh(\mathbf{x}_t\mathbf{W}_{xh}+\mathbf{h}_{t-1}\mathbf{W}_{hh}+\mathbf{b}_h)\), \(\mathbf{h}_0=0\).</li>
+        <li>Shapes: \(\mathbf{x}_t\in\mathbb{R}^{D}\), \(\mathbf{W}_{xh}\in\mathbb{R}^{D\times H}\), \(\mathbf{W}_{hh}\in\mathbb{R}^{H\times H}\).</li>
+        <li>Parameters: \(DH+H^2+H\); independent of sequence length \(T\).</li>
+        <li>Worked: \(D=2,H=2\), \(\mathbf{x}_1=(1,0)\) → \(\mathbf{z}_1=(0.6,-0.3)\) → \(\mathbf{h}_1=(0.537,-0.291)\).</li>
+        <li>PyTorch: input \((N,T,D)\) needs <code>batch_first=True</code>; default is \((T,N,D)\).</li>
+        <li>Many-to-one: final \(h_T\) → label. Many-to-many: \(g(h_t)\) per token.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Elman, J. L. — <em>Finding Structure in Time</em> (1990).</li>
+      <li>Rumelhart, Hinton &amp; Williams — <em>Learning Representations by Back-propagating Errors</em> (1986).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="index.html">← Module overview</a>
+      <a href="m2-02-bptt-and-vanishing-gradients.html">Next: BPTT &amp; vanishing gradients →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M2 Sequences &amp; NLP</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m2-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

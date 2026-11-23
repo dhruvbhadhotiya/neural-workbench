@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Segmentation and FCNs · DeepLearn Lab</title>
+<meta name="description" content="Semantic, instance and panoptic masks; fully convolutional networks; transposed-conv output size, upsampling artefacts and dilated ASPP context.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m5" data-lesson="m5-01" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="index.html" aria-current="page">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 5 · Segmentation &amp; Kaggle</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M5 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m5-01">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M5 Segmentation</a> / <span>Segmentation &amp; FCN</span>
+    </nav>
+
+    <h1>Segmentation and FCNs: a label for every pixel</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 1 of 4 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Classification answers one question per image. Segmentation answers one question per pixel —
+      and forces you to get spatial resolution back after every pooling layer.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Distinguish semantic, instance and panoptic segmentation from the colour rules that define them.</li>
+        <li>Compute a transposed-convolution output size, including <code>output_padding</code>.</li>
+        <li>Explain why bilinear upsampling is smooth and transposed convolutions can leave a checkerboard.</li>
+        <li>Calculate effective kernel size <span class="mono">K_eff = D(K−1)+1</span> for ASPP dilation rates.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        A classifier maps one image to one label: \(X\in\mathbb{R}^{N\times C\times H\times W}\)
+        becomes \(\hat y\in\{1,\dots,K_{classes}\}^N\). A segmentation model keeps the grid:
+        its output is \(\hat Y\in\{1,\dots,K_{classes}\}^{N\times H\times W}\). The loss is still
+        cross-entropy — now summed over every pixel — and the target is no longer a scalar but an
+        image you can draw.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: three ways to label a grid</h2>
+
+    <p>
+      <strong>Semantic</strong> segmentation gives every pixel a class id: all cars share one colour.
+      <strong>Instance</strong> segmentation separates objects of the same class: car 1 and car 2 get
+      different colours, but the road gets none. <strong>Panoptic</strong> segmentation combines
+      them: <em>stuff</em> classes (road, sky) get a class colour, <em>thing</em> classes (car, person)
+      get one colour per instance. In the lab, you paint class labels and the widget derives instances
+      by connected components — the same 4-neighbour rule an instance head must learn from data.
+    </p>
+
+    <section class="lab" data-widget="m5-01-mask-painter" data-badge="exact"
+             data-title="Paint semantic masks, switch to instance and panoptic views"
+             data-note="Exact: class pixel counts and instance ids come from connected components computed on the grid you paint.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      A classifier ends with global average pooling, which throws the \(H,W\) axes away. The
+      <strong>fully convolutional network</strong> (FCN) replaces that with a \(1\times1\) convolution
+      that maps channels to class logits while keeping the grid, then upsamples back to input
+      resolution. Skips from early layers add the fine detail that pooling destroyed. The output
+      tensor is \((N,K_{classes},H,W)\) — logits, one channel per class, before a per-pixel softmax.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Pooling buys context and costs resolution. Every design decision in segmentation is a way
+        to recover the lost pixels without losing that context.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="tconv">1 · Transposed-convolution output size</h3>
+
+    <p>
+      Let \(H\) be the input side, \(K\) the kernel, \(S\) the stride, \(P\) the padding, \(D\) the
+      dilation rate and \(o\) <code>output_padding</code>. A transposed convolution (sometimes called
+      a deconvolution) produces
+    </p>
+
+    \[ H' = (H-1)S - 2P + D(K-1) + o + 1 \]
+
+    <p>
+      <strong>Worked example.</strong> An FCN upsampling block takes \(H=4\) with
+      \(K=3,\ S=2,\ P=1,\ D=1,\ o=1\):
+      \(H' = (4-1)\cdot2 - 2\cdot1 + 1\cdot(3-1) + 1 + 1 = 6 - 2 + 2 + 1 + 1 = 8\).
+      So \(4\times4 \to 8\times8\), exactly \(2\times\). Change only \(o\) to 0 and you get
+      \(6-2+2+0+1=7\): the classic off-by-one that makes skip concatenation fail.
+    </p>
+
+    <h3 id="upsample">2 · Upsampling 4×4 → 8×8 by factor 2</h3>
+
+    <p>
+      For factor \(f=2\), <strong>nearest neighbour</strong> repeats each source pixel \(f\) times:
+      output pixel \(y\) reads input \(\lfloor y/f\rfloor\). Row \(0\) of the source
+      \([0,4,8,12]\) becomes \([0,0,4,4,8,8,12,12]\).
+    </p>
+
+    <p>
+      <strong>Bilinear</strong> reads source coordinate
+      \(s_y=\frac{y+0.5}{f}-0.5\), clamped to \([0,H-1]\), with fractional part \(f_y=s_y-\lfloor s_y\rfloor\).
+      On row \(y=0\): \(s_y=0.25-0.5=-0.25\to0\), so \(f_y=0\) and only the horizontal weights matter.
+      For \(x=1\): \(s_x=0.25\), \(f_x=0.25\), giving \(0\cdot0.75+4\cdot0.25=1\). Continuing,
+      \(x=2\to3\), \(x=3\to5\), \(x=4\to7\), \(x=5\to9\), \(x=6\to11\), \(x=7\to12\):
+      the interpolated row is \([0,1,3,5,7,9,11,12]\). Smooth, but it invents intermediate values.
+    </p>
+
+    <p>
+      A <strong>transposed convolution</strong> with a learnable kernel does not interpolate — it
+      learns a pattern. With stride 2 and kernel \(\begin{bmatrix}1&amp;0.5\\0.5&amp;0.25\end{bmatrix}\),
+      one active input pixel paints the \(2\times2\) block \(\begin{bmatrix}1&amp;0.5\\0.5&amp;0.25\end{bmatrix}\)
+      into the output; neighbouring blocks overlap unevenly, producing the visible
+      <strong>checkerboard artefact</strong> the lab shows.
+    </p>
+
+    <section class="lab" data-widget="m5-01-upsampling-comparer" data-badge="exact"
+             data-title="Nearest vs bilinear vs transposed conv"
+             data-note="Exact: the three 8×8 outputs are computed with DL.tensor.upsampleNearest, upsampleBilinear and convTranspose2d; displayed numbers are the actual output cells.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="dilation">3 · Dilated kernels and ASPP</h3>
+
+    <p>
+      Dilating a \(K\)-tap kernel by rate \(D\) inserts \(D-1\) zeros between taps, so the
+      <strong>effective kernel size</strong> is
+    </p>
+
+    \[ K_{eff} = D(K-1)+1 \]
+
+    <p>
+      <strong>Worked ASPP example.</strong> Atrous spatial pyramid pooling uses \(K=3\) with rates
+      \(r\in\{1,6,12,18\}\). Substituting: \(r=1\to K_{eff}=1\cdot2+1=3\);
+      \(r=6\to 6\cdot2+1=13\); \(r=12\to 12\cdot2+1=25\); \(r=18\to 18\cdot2+1=37\).
+      The \(r=12\) branch sees a \(25\times25\) patch with only \(3^2=9\) weights — the same
+      parameter count as a plain \(3\times3\), but a 25-tap-wide view. On a \(41\times41\) feature
+      map it covers \(25^2/41^2 \approx 0.372\), about 37% of the map.
+    </p>
+
+    <section class="lab" data-widget="m5-01-dilated-rf" data-badge="exact"
+             data-title="Dilation, effective field and coverage"
+             data-note="Exact: the tap pattern is DL.tensor.dilateKernel applied to a unit impulse and the coverage is counted from the resulting grid.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h3 id="loss">4 · The loss is per pixel, not per image</h3>
+
+    <p>
+      With logits \(\hat z_{n,c,i,j}\) at pixel \((i,j)\) and target class \(y_{n,i,j}\), the
+      per-pixel cross-entropy (mean reduction over \(N\cdot H\cdot W\)) is
+    </p>
+
+    \[ \mathcal{L} = -\frac{1}{NHW}\sum_{n=1}^{N}\sum_{i=1}^{H}\sum_{j=1}^{W}
+       \log\,\mathrm{softmax}(\hat z_n)_{y_{n,i,j}} \]
+
+    <p>
+      <strong>Worked check.</strong> One pixel with logits \([2,1,0.1]\) and target class 1:
+      softmax \(=[0.659,0.242,0.099]\), so the loss is \(-\log 0.242\approx1.419\).
+      Four pixels with losses \(1.42,0.30,0.70,0.20\) give \((1.42+0.30+0.70+0.20)/4=0.655\).
+      Replacing this with one label per image would discard exactly the \(H\cdot W\) answers you
+      are being graded on.
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      The FCN head, an explicit transposed-convolution shape print, and an ASPP block. Shapes are
+      written in the course convention \((N,C,H,W)\).
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+from torch.nn import functional as F
+
+class FCNHead(nn.Module):
+    """Turn encoder features into per-pixel class logits."""
+    def __init__(self, c_in, classes):
+        super().__init__()
+        self.score = nn.Conv2d(c_in, classes, kernel_size=1)   # (N,C,H,W) -> (N,K,H,W)
+
+    def forward(self, feat, size):
+        logits = self.score(feat)
+        # Masks are integers: resize with nearest, never bilinear.
+        return F.interpolate(logits, size=size, mode="bilinear", align_corners=False)
+
+# Transposed conv: verify the size arithmetic from the lesson.
+up = nn.ConvTranspose2d(8, 4, kernel_size=3, stride=2, padding=1, output_padding=1)
+x = torch.zeros(1, 8, 4, 4)                 # (N=1, C=8, H=4, W=4)
+print(tuple(up(x).shape))                    # (1, 4, 8, 8)  -> 4*2 = 8
+no_op = nn.ConvTranspose2d(8, 4, 3, 2, 1, 0)
+print(tuple(no_op(x).shape))                 # (1, 4, 7, 7)  -> off by one
+
+class ASPP(nn.Module):
+    """Four parallel fields of view; Keff = D*(K-1)+1."""
+    def __init__(self, c_in, classes):
+        super().__init__()
+        self.branches = nn.ModuleList([
+            nn.Conv2d(c_in, 64, 1),
+            nn.Conv2d(c_in, 64, 3, padding=6,  dilation=6),   # Keff = 13
+            nn.Conv2d(c_in, 64, 3, padding=12, dilation=12),  # Keff = 25
+            nn.Conv2d(c_in, 64, 3, padding=18, dilation=18),  # Keff = 37
+        ])
+        self.global_branch = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1), nn.Conv2d(c_in, 64, 1))
+        self.out = nn.Conv2d(64 * 5, classes, 1)
+
+    def forward(self, x):
+        parts = [b(x) for b in self.branches]
+        g = self.global_branch(x)
+        parts.append(F.interpolate(g, size=x.shape[-2:], mode="bilinear", align_corners=False))
+        return self.out(torch.cat(parts, dim=1))              # (N, classes, H, W)</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      Note the asymmetry: logits (float) may be resized bilinearly, but integer masks and labels
+      must be resized with <code>mode="nearest"</code> or they become fractional class ids.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Ignoring <code>output_padding</code></p>
+        <p>
+          With \(K=3,S=2,P=1\), a \(16\times16\) map gives 31, not 32, unless
+          <code>output_padding=1</code>. The skip concatenation then fails by one pixel. Compute
+          \(H'\) before wiring the decoder.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Softmax over the wrong dimension</p>
+        <p>
+          Logits have shape \((N,K_{classes},H,W)\). Class is channel dimension 1. Softmax over
+          dimension 0 mixes batch items and produces nonsense probabilities that still sum to 1.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Bilinear-resizing a mask</p>
+        <p>
+          A mask holds integer class ids. Bilinear interpolation invents ids such as 1.4; nearest
+          neighbour preserves labels. Resize float logits smoothly, labels never.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Ignoring class imbalance</p>
+        <p>
+          Background can cover 95% of a mask. Plain cross-entropy is then minimised by predicting
+          background everywhere; use class weights, Dice loss, or both.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader writes a transposed convolution with \(K=3, S=2, P=1\) on a \(16\times16\) feature
+      map, expecting \(32\times32\) to add to a skip. They get \(31\times31\) and PyTorch reports a
+      concatenation size mismatch. Why?
+    </p>
+
+    <details>
+      <summary>Show the cause and the fix</summary>
+      <p>
+        \((16-1)\cdot2-2\cdot1+1\cdot(3-1)+0+1 = 30-2+2+1 = 31\). The missing term is
+        <code>output_padding=1</code>: it adds exactly one row and one column, giving
+        \(30-2+2+1+1=32\). Set <code>nn.ConvTranspose2d(c_in, c_out, 3, stride=2, padding=1,
+        output_padding=1)</code>. If your decoder uses an interpolate-then-conv block instead,
+        set its output size explicitly to the skip's \(H,W\).
+      </p>
+      <p class="small muted">
+        Second thing to check: the skip and the upsampled map must agree in channels too. Padding
+        fixes space; it does not fix a wrong <code>c_out</code>.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m5-01">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — segmentation and FCNs",
+        "questions": [
+          {
+            "q": "Which statement distinguishes semantic from instance segmentation?",
+            "options": [
+              "Semantic labels each pixel; instance separates individual objects of the same class",
+              "Semantic uses colour; instance uses grayscale",
+              "Instance ignores the background; semantic labels only objects",
+              "There is no difference once the mask is a tensor"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: semantic assigns a class per pixel; instance additionally assigns an object id.",
+              "Colour is only a display convention, not a definition.",
+              "Both models must handle background; panoptic is the one that assigns stuff classes without instances.",
+              "They differ in the label structure: class ids versus class-plus-instance ids."
+            ]
+          },
+          {
+            "q": "ConvTranspose2d with H=4, K=3, S=2, P=1, output_padding=1 and dilation 1 outputs a side of…",
+            "options": ["7", "8", "9", "16"],
+            "correct": 1,
+            "why": [
+              "That is the result with output_padding=0.",
+              "Correct: (4−1)·2 − 2 + 2 + 1 + 1 = 8.",
+              "That would need a larger kernel or extra padding.",
+              "That doubles H twice, not once."
+            ]
+          },
+          {
+            "q": "Why can a transposed convolution with stride 2 produce a checkerboard pattern?",
+            "options": [
+              "Because it uses bilinear interpolation",
+              "Because integer masks are resized",
+              "Because overlapping kernel blocks contribute unevenly across output positions",
+              "Because the softmax is computed over H"
+            ],
+            "correct": 2,
+            "why": [
+              "Bilinear interpolation is smooth and does not create this artefact.",
+              "Mask resizing creates wrong labels, not a periodic intensity pattern.",
+              "Correct: non-uniform learned weights and stride-2 overlap leave alternating high/low cells.",
+              "Softmax over H would be a separate bug, not a spatial pattern."
+            ]
+          },
+          {
+            "q": "For a 3×3 kernel at dilation rate 12, Keff is…",
+            "options": ["15", "24", "25", "37"],
+            "correct": 2,
+            "why": [
+              "That is 12+3, not the formula.",
+              "That counts taps on one axis only after the wrong offset.",
+              "Correct: Keff = 12·(3−1)+1 = 25.",
+              "That is the rate-18 branch: 18·2+1 = 37."
+            ]
+          },
+          {
+            "q": "In a 3×3 ASPP at rates 1, 6, 12, 18, which branch has the largest effective field with the same 9 weights?",
+            "options": ["rate 1", "rate 6", "rate 12", "rate 18"],
+            "correct": 3,
+            "why": [
+              "Rate 1 is an ordinary 3×3 convolution.",
+              "Rate 6 gives Keff = 13, not the largest.",
+              "Rate 12 gives Keff = 25.",
+              "Correct: rate 18 gives Keff = 18·2+1 = 37 with the same 9 sampled weights."
+            ]
+          },
+          {
+            "q": "What does an FCN replace global average pooling with?",
+            "options": [
+              "A 1×1 convolution to class logits plus upsampling back to input resolution",
+              "A larger fully connected layer",
+              "A max-pool over the class axis",
+              "A bilinear resize of the labels"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: a 1×1 conv keeps (H,W) and produces one logit channel per class.",
+              "A fully connected layer destroys the grid again.",
+              "Pooling over classes would discard the predictions.",
+              "Labels are resized after prediction, not instead of the head."
+            ]
+          },
+          {
+            "q": "For one pixel with logits [2, 1, 0.1] and target class 1, the cross-entropy is about…",
+            "options": ["0.099", "0.242", "1.419", "2.000"],
+            "correct": 2,
+            "why": [
+              "That is the softmax probability of class 0.",
+              "That is the softmax probability assigned to the target class.",
+              "Correct: −log(0.242) ≈ 1.419, where 0.242 is softmax(logits)[1].",
+              "That is the largest logit, not a loss."
+            ]
+          },
+          {
+            "q": "You need to shrink a ground-truth mask from 512×512 to 256×256. Which resize mode is correct?",
+            "options": ["bilinear", "bicubic", "nearest", "area with logits"],
+            "correct": 2,
+            "why": [
+              "Bilinear creates fractional class ids that are not valid labels.",
+              "Bicubic has the same problem and can overshoot the label range.",
+              "Correct: nearest preserves integer class ids exactly.",
+              "Area might be fine visually but the phrase 'with logits' belongs to float predictions, not labels."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Semantic labels pixels by class, instance labels separate objects, panoptic combines the two rules.<br>
+        2 · A transposed conv grows space by \((H-1)S-2P+D(K-1)+o+1\); forgetting \(o\) is the off-by-one in most skip mismatches.<br>
+        3 · Upsampling trades smoothness (bilinear) for learned detail (transposed conv, with possible checkerboard), while dilation widens context for free via \(K_{eff}=D(K-1)+1\).
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m5-01">
+      <h2>Cheat sheet — M5·01</h2>
+      <ul>
+        <li>Output tensor: \((N,K_{classes},H,W)\); softmax over class axis 1.</li>
+        <li>Transposed conv: \(H'=(H-1)S-2P+D(K-1)+o+1\).</li>
+        <li>Nearest index: \(\lfloor y/f\rfloor\); bilinear source: \((y+0.5)/f-0.5\).</li>
+        <li>Dilated kernel: \(K_{eff}=D(K-1)+1\); ASPP \(K=3\), rates 1/6/12/18 → 3/13/25/37.</li>
+        <li>Per-pixel CE: mean of \(-\log p_{y_{i,j}}\) over all \(N\cdot H\cdot W\) pixels.</li>
+        <li>Resize float logits bilinearly; resize integer masks with nearest only.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Long, J. — <em>Fully Convolutional Networks for Semantic Segmentation</em> (2015).</li>
+      <li>Yu, F. — <em>Multi-Scale Context Aggregation by Dilated Convolutions</em> (2016).</li>
+      <li>Chen, L.-C. — <em>Rethinking Atrous Convolution for Semantic Image Segmentation</em> (2017).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="index.html">← Module overview</a>
+      <a href="m5-02-unet-and-dice.html">Next: U-Net, Dice and IoU →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M5 Segmentation &amp; Kaggle</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m5-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

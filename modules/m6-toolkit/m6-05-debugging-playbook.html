@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The systematic debugging playbook · DeepLearn Lab</title>
+<meta name="description" content="A decision tree for broken runs: check the baseline and loss at init, overfit one batch, run an LR range test, trace shapes and gradient norms.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m6" data-lesson="m6-05" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="index.html" aria-current="page">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search lessons</button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 6 · Advanced toolkit</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M6 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m6-05">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M6 Advanced toolkit</a> / <span>Debugging playbook</span>
+    </nav>
+
+    <h1>The systematic debugging playbook</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 5 of 7 <span class="dot">·</span>
+      <span class="badge badge--illustrative">Illustrative sweep</span> + <span class="badge badge--exact">Exact checklist</span> labs
+    </p>
+    <p class="lede">
+      A bad deep-learning score is usually a bug, not a modelling limitation. Follow an ordered
+      decision tree so you change one thing at a time and know what each observation means.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Predict the loss at initialisation for a \(C\)-class classifier and interpret a mismatch.</li>
+        <li>Run and read a learning-rate range test.</li>
+        <li>Use overfit-one-batch, shape/dtype traces and gradient norms to localise a failure.</li>
+        <li>Apply a saved decision checklist without changing several things at once.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        In classical ML a poor score meant "try different features or regularisation". In deep
+        learning the first questions are mechanical: does the loss start at \(\ln C\)? Can the model
+        memorise eight examples? Are the gradients finite? Only after those pass does model choice
+        become the right conversation.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: bisect the pipeline</h2>
+
+    <p>
+      A training run is a chain: data → batch → forward → loss → backward → optimizer → metrics.
+      Every check should cut that chain in half. Overfitting one batch tests everything up to the
+      optimizer. A loss at \(\ln C\) tests the head and labels. A gradient norm tests the backward
+      path. A learning-rate sweep tests the optimizer's scale. You fix the earliest failing link,
+      rerun, and only then move on.
+    </p>
+
+    <p>
+      Changing five settings at once destroys this logic: the run improves, and you cannot say
+      which change did it. Keep a baseline checkpoint and revert to it between experiments.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Order matters: baseline → loss at init → overfit one batch → LR range → regularisation.
+        A hyperparameter search before these checks is a search for the bug's favourite hiding place.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="initloss">1 · Loss at initialisation</h3>
+
+    <p>
+      With a roughly balanced \(C\)-class dataset and a final linear layer whose logits start near
+      zero, softmax gives \(p_c\approx1/C\). The mean cross-entropy at init is therefore
+    </p>
+
+    \[ \mathcal{L}_0 \approx -\ln\frac{1}{C} = \ln C \]
+
+    <p>
+      \(C\) is the number of classes and \(\ln\) is the natural logarithm, matching the nats used
+      by PyTorch's cross-entropy.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Ten classes: \(\ln 10=2.3026\). Two classes: \(\ln2=0.6931\).
+      Four classes: \(\ln4=1.3863\). A binary classifier reporting \(0.693\) at step 0 is behaving
+      <em>correctly</em>; a 10-class model reporting \(0.69\) at step 0 has a label or head bug —
+      it behaves like a binary model.
+    </p>
+
+    <h3 id="lr">2 · LR range test reading</h3>
+
+    <p>
+      Increase \(\eta\) geometrically from a very small value while training for a few hundred
+      steps, recording the loss. Three regions appear: flat (too small to move), falling (useful),
+      and rising or NaN (too large). A practical pick is the learning rate one decade before the
+      loss minimum, or the steepest-descent point.
+    </p>
+
+    <p>
+      <strong>Worked example from the stored sweep in the lab.</strong> At \(\eta=10^{-5}\) the loss
+      is \(2.30\) (unchanged from \(\ln10\)); at \(10^{-3}\) it is \(1.62\); at \(10^{-2}\) it is
+      \(0.81\); at \(10^{-1}\) it is \(1.14\); at \(10^{0}\) it diverges. The minimum is at
+      \(10^{-2}\). One decade before it is \(10^{-3}\), a conservative choice; the steepest drop in
+      this stored curve sits between \(10^{-3}\) and \(10^{-2}\). Both are readings of the same
+      curve, not universal constants.
+    </p>
+
+    <h3 id="gradnorm">3 · Gradient norm check</h3>
+
+    \[ \lVert g\rVert_2 = \sqrt{\sum_i g_i^2}, \qquad
+       g \leftarrow g\cdot\min\!\left(1,\frac{c}{\lVert g\rVert_2}\right) \]
+
+    <p>
+      \(g_i\) are the components of the flattened gradient vector and \(c\) is the clipping
+      threshold. A norm near zero means no learning signal; a norm that grows by \(10\times\) per
+      step means divergence.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> For \(g=(-0.2,\,0.4)\):
+      \(\lVert g\rVert=\sqrt{0.04+0.16}=\sqrt{0.20}=0.4472\). With \(c=1\), the factor is
+      \(\min(1,1/0.4472)=1\), so nothing changes. For \(g=(3,4)\), \(\lVert g\rVert=5\) and the
+      factor is \(1/5=0.2\), giving \(g=(0.6,0.8)\), whose norm is exactly \(1\).
+    </p>
+
+    <h2 id="lab">Lab: range test and decision ladder</h2>
+
+    <p>
+      The first lab stores a schematic LR-versus-loss sweep; the curve and marker are illustrative,
+      but the marker position is computed from the stored points. The second lab is exact: your
+      answers are saved locally, and the progress meter and next action are computed from them.
+    </p>
+
+    <section class="lab" data-widget="m6-05-lr-range" data-badge="illustrative"
+             data-title="Learning-rate range test (stored sweep)"
+             data-note="Illustrative: a stored schematic sweep, not a measurement; the loss-minimum and recommended-LR markers are computed from those stored points.">
+      <div class="lab__body"></div>
+    </section>
+
+    <section class="lab" data-widget="m6-05-ladder" data-badge="exact"
+             data-title="Keyboard-operable debugging ladder"
+             data-note="Exact: completion percentage and the next recommended action are computed from the saved yes/no answers; state persists in local storage.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code: a debug script you can paste into a notebook</h2>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import math, torch
+from torch import nn
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("loss at init for C classes:", [round(math.log(c), 4) for c in (2, 4, 10)])
+
+# 1. Shapes and dtypes at the first batch
+x, y = next(iter(train_loader))
+x, y = x.to(device), y.to(device)
+print("batch", tuple(x.shape), x.dtype, "labels", tuple(y.shape), y.dtype,
+      "label range", int(y.min()), int(y.max()))
+
+model = make_model().to(device)
+logits = model(x[:8])              # (8, C)
+print("logits", tuple(logits.shape), logits.dtype)
+loss = nn.functional.cross_entropy(logits, y[:8])
+print("loss at init", float(loss), "expected about", math.log(logits.shape[1]))
+
+# 2. Overfit ONE batch: loss must approach zero
+opt = torch.optim.SGD(model.parameters(), lr=0.05)
+for step in range(150):
+    opt.zero_grad()
+    l = nn.functional.cross_entropy(model(x[:8]), y[:8])
+    l.backward()
+    opt.step()
+    if step in (0, 49, 149):
+        print("overfit step", step, "loss", round(float(l), 5))
+
+# 3. Gradient norms after a real batch
+opt.zero_grad()
+nn.functional.cross_entropy(model(x), y).backward()
+norms = [float(p.grad.norm()) for p in model.parameters() if p.grad is not None]
+print("grad norm min/max", round(min(norms), 6), round(max(norms), 6),
+      "all finite", all(map(math.isfinite, norms)))
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+# 4. Learning-rate range test: geometric sweep, fresh model each time
+for e in range(-6, 1):
+    lr = 10.0 ** e
+    m = make_model().to(device)
+    o = torch.optim.SGD(m.parameters(), lr=lr)
+    o.zero_grad()
+    loss = nn.functional.cross_entropy(m(x), y)
+    loss.backward(); o.step()
+    print(f"eta={lr:.1e}  loss_after_one_step={float(loss):.4f}")</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      The overfit test should drive the loss close to zero on eight examples. If it cannot, the
+      failure is in the model, labels, loss or optimizer — not in dataset size or regularisation.
+      The range test above uses one step per rate for speed; a proper sweep uses a few hundred.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Changing five things at once</p>
+        <p>
+          If you alter the LR, architecture, augmentation and loss together, an improvement teaches
+          you nothing. Keep a baseline and bisect the pipeline one check at a time.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Trusting train loss alone</p>
+        <p>
+          Falling training loss with flat validation accuracy can be memorisation or a label leak.
+          Always check the held-out metric and the data pipeline.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Skipping the baseline</p>
+        <p>
+          Without a known-good run you cannot tell whether the current result is bad. Record a
+          tiny overfit result and a simple majority-class baseline first.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Misreading \(\ln2\)</p>
+        <p>
+          A binary cross-entropy near \(0.693\) at step 0 is the correct random-guess loss, not a
+          bug. Compare against \(\ln C\) with the actual class count.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A colleague reports "my loss is 0.69 and stuck — the model is broken". It is a balanced
+      binary classifier with a linear output head trained with <code>BCEWithLogitsLoss</code>.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        \(0.693=\ln2\) is the <em>expected</em> loss at initialisation for a balanced two-class
+        problem: the logits start near zero, so the probability is near 0.5. Check whether the loss
+        actually moves after a few hundred steps and whether accuracy exceeds the majority-class
+        baseline. If it stays at exactly 0.693 forever, then look for a real bug: zero learning
+        rate, all-zero gradients, detached logits, or labels that never reach the loss.
+      </p>
+      <p class="small muted">
+        For a 10-class problem, 0.693 would be suspiciously low at init — probably a label range of
+        \(\{0,1\}\) fed to a 10-way cross-entropy. Print <code>y.min()</code>, <code>y.max()</code>
+        and the logit shape.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m6-05">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — debugging playbook",
+        "questions": [
+          {
+            "q": "Expected cross-entropy at init for a balanced 10-class classifier is about…",
+            "options": ["0.693", "1.386", "2.303", "10.0"],
+            "correct": 2,
+            "why": ["That is the binary case, ln 2.", "That is the four-class case, ln 4.", "Correct: ln 10 = 2.3026.", "The loss is a log, not the class count."]
+          },
+          {
+            "q": "A binary classifier starts at 0.693. What should you do first?",
+            "options": ["Assume a label bug", "Recognise ln 2 and check whether the loss moves", "Double the learning rate", "Add two layers"],
+            "correct": 1,
+            "why": ["0.693 is the correct init value for two classes.", "Correct: compare with ln C and then verify training progress.", "Changing the LR before checking the baseline hides information.", "Architecture changes are premature."]
+          },
+          {
+            "q": "What does a successful overfit-one-batch test establish?",
+            "options": ["The model will generalise", "The data pipeline, model, loss and optimizer can fit a tiny set", "Validation is unnecessary", "Weight decay is correct"],
+            "correct": 1,
+            "why": ["One batch says nothing about generalisation.", "Correct: it isolates implementation bugs from data quantity.", "You still need a held-out set.", "Regularisation is irrelevant to this check."]
+          },
+          {
+            "q": "For g = (3, 4) with clipping threshold c = 1, the clipped vector is…",
+            "options": ["(3, 4)", "(0.3, 0.4)", "(0.6, 0.8)", "(0.75, 1.0)"],
+            "correct": 2,
+            "why": ["That is unclipped; its norm is 5.", "That divides by 10 instead of 5.", "Correct: norm 5, scale 1/5, giving (0.6, 0.8).", "That is not a uniform scaling of g."]
+          },
+          {
+            "q": "In a stored LR sweep, loss is flat at 1e-5, falls to a minimum at 1e-2, then diverges at 1. What is a sensible conservative LR?",
+            "options": ["1e-5", "1e-3", "1e-1", "1.0"],
+            "correct": 1,
+            "why": ["Too small: the loss is flat there.", "Correct: one decade below the minimum is a common conservative pick.", "That is already in the rising region.", "That diverges."]
+          },
+          {
+            "q": "Which check comes first in a systematic debugging ladder?",
+            "options": ["Grid search over learning rates", "Record a known-good baseline and check loss at init", "Replace the backbone", "Increase dataset size"],
+            "correct": 1,
+            "why": ["A search before a baseline searches for bugs.", "Correct: establish ground truth and check the cheapest signal first.", "That changes too many variables at once.", "More data cannot fix a broken pipeline."]
+          },
+          {
+            "q": "All gradient norms are exactly zero after backward. Which cause is most likely?",
+            "options": ["Learning rate too high", "The loss graph is detached or parameters are frozen", "Batch size too large", "Cross-entropy instead of MSE"],
+            "correct": 1,
+            "why": ["LR affects the update, not the gradient.", "Correct: no graph path or requires_grad=False yields zero gradients.", "Batch size does not zero every gradient.", "Loss choice alone does not remove the graph."]
+          },
+          {
+            "q": "Why bisect a pipeline instead of changing many settings together?",
+            "options": ["It is faster to type", "Each check localises the first failing link", "It avoids using a validation set", "It increases model capacity"],
+            "correct": 1,
+            "why": ["Typing speed is irrelevant.", "Correct: one change at a time preserves causal information.", "Validation is still needed.", "Capacity is unrelated to debugging order."]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Start with \(\ln C\): \(0.693\) is correct for two classes and \(2.303\) for ten.<br>
+        2 · Overfit one batch, trace shapes/dtypes, and inspect gradient norms; \(g=(3,4)\) clips to \((0.6,0.8)\) at \(c=1\).<br>
+        3 · Read the LR sweep from flat to falling to divergent; pick conservatively one decade before the minimum and change one thing at a time.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m6-05">
+      <h2>Cheat sheet — M6·05</h2>
+      <ul>
+        <li>\(\mathcal L_0\approx\ln C\): 0.693 (2 classes), 1.386 (4), 2.303 (10).</li>
+        <li>LR range: flat → falling → divergent; try one decade below the minimum.</li>
+        <li>\(\lVert g\rVert_2=\sqrt{\sum g_i^2}\); clip by \(\min(1,c/\lVert g\rVert)\).</li>
+        <li>Order: baseline → init loss → one-batch overfit → LR → regularisation.</li>
+        <li>Print shapes, dtypes, label range, grad norms; change one variable per run.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Smith, L. — <em>Cyclical Learning Rates for Training Neural Networks</em> (2017).</li>
+      <li>Smith, L. — <em>A Disciplined Approach to Neural Network Hyper-Parameters</em> (2018).</li>
+      <li>Zeiler, M. — <em>Visualizing and Understanding Convolutional Networks</em> (2014).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m6-04-deployment.html">← Previous: deployment</a>
+      <a href="m6-06-math-cheatsheets.html">Next: math cheatsheets →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M6 Advanced toolkit</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m6-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M3 · GANs — DeepLearn Lab</title>
+<meta name="description" content="Four interactive lessons on GAN objectives, training diagnostics, DCGAN and conditional GANs, and the major GAN variants, with a ten-question module exam.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-root="../../" data-module="m3">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="index.html" aria-current="page">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" style="padding-top:var(--s8)">
+    <div>
+      <p class="hero__eyebrow">Module 3 · GANs · 4 lessons</p>
+      <h1>Learn to sample a distribution by playing a game.</h1>
+      <p class="hero__lede">
+        Start with a 1-D generator and discriminator trained live in your browser, diagnose mode
+        collapse, compute a Fréchet distance, trace DCGAN shapes, and finish with CycleGAN, StarGAN
+        and WGAN-GP.
+      </p>
+      <div class="hstack">
+        <a class="btn btn--accent" href="m3-01-gan-basics.html" style="padding:9px 14px;font-size:var(--fs-3)">Start lesson 1 →</a>
+        <a class="btn" href="#exam" style="padding:9px 14px;font-size:var(--fs-3)">Take the module exam</a>
+      </div>
+      <div class="hero__stats" style="margin-top:var(--s6)">
+        <div class="hero__stat"><b>4</b><span>lessons</span></div>
+        <div class="hero__stat"><b>7</b><span>interactive labs</span></div>
+        <div class="hero__stat"><b>10</b><span>exam questions</span></div>
+        <div class="hero__stat"><b>0</b><span>external assets</span></div>
+      </div>
+    </div>
+    <div aria-hidden="true">
+      <svg viewBox="0 0 420 300" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
+        <defs>
+          <linearGradient id="m3edge" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".15"/>
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity=".8"/>
+          </linearGradient>
+        </defs>
+        <g stroke="url(#m3edge)" stroke-width="1.6" fill="none">
+          <path d="M55 150 L155 80"/><path d="M55 150 L155 220"/>
+          <path d="M155 80 L270 150"/><path d="M155 220 L270 150"/>
+          <path d="M270 150 L380 150"/>
+        </g>
+        <g fill="var(--surface)" stroke="var(--accent)" stroke-width="2">
+          <circle cx="55" cy="150" r="20"/><circle cx="155" cy="80" r="22"/><circle cx="155" cy="220" r="22"/>
+          <circle cx="270" cy="150" r="24"/>
+        </g>
+        <g fill="var(--accent)"><circle cx="380" cy="150" r="17"/></g>
+        <g font-family="ui-monospace, monospace" font-size="11" fill="var(--ink-3)">
+          <text x="42" y="182">z</text><text x="146" y="52">G</text><text x="146" y="262">D</text>
+          <text x="262" y="122">x̃</text><text x="365" y="182">x</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="section-head">
+      <h2>How to use this module</h2>
+      <p>offline · exact and illustrative labs · read in order</p>
+    </div>
+    <div class="grid3">
+      <div class="callout callout--tip" style="margin:0">
+        <p class="callout__title">Run the flagship lab</p>
+        <p>Lesson 1 trains two MLPs directly in your browser with a time-sliced loop. Press Run and
+           watch the generated histogram, the discriminator's decision curve and both losses.</p>
+      </div>
+      <div class="callout callout--bridge" style="margin:0">
+        <p class="callout__title">Read the badge first</p>
+        <p><span class="badge badge--exact">Exact math</span> means a number is computed from the
+           data on screen. <span class="badge badge--illustrative">Illustrative</span> means the
+           trace is schematic and says so. M3 has both kinds.</p>
+      </div>
+      <div class="callout callout--math" style="margin:0">
+        <p class="callout__title">Same notation throughout</p>
+        <p>\(\eta\) is the learning rate, \(\lambda\) a loss weight, images are NCHW, and \(z\)
+           is latent noise. The worked examples use small integers you can check by hand.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap" id="lessons">
+    <div class="section-head">
+      <h2>The four lessons</h2>
+      <p>M3 · generative models</p>
+    </div>
+
+    <div class="module-grid">
+      <a class="module-card" href="m3-01-gan-basics.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M3 · 01</span>
+          <span class="tag">Minimax</span>
+        </div>
+        <h3>GAN basics: generator, discriminator, minimax</h3>
+        <p>Derive the objective and the optimal discriminator, compute a three-sample BCE, then train a live 1-D GAN.</p>
+        <div class="module-card__meta">
+          <span>Lesson 1 of 4 · 12 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m3-02-training-and-evaluating-gans.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M3 · 02</span>
+          <span class="tag">FID</span>
+        </div>
+        <h3>Training and evaluating GANs</h3>
+        <p>Scrub a mode-collapse trace, read the loss tug-of-war, and compute a 2-D Fréchet distance from sliders.</p>
+        <div class="module-card__meta">
+          <span>Lesson 2 of 4 · 14 min read</span>
+          <span>2 illustrative · 1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m3-03-dcgan-and-conditional-gans.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M3 · 03</span>
+          <span class="tag">DCGAN</span>
+        </div>
+        <h3>DCGAN and conditional GANs</h3>
+        <p>Trace 100 → (512,4,4) → (3,64,64), count real parameters, and add a class code to both networks.</p>
+        <div class="module-card__meta">
+          <span>Lesson 3 of 4 · 16 min read</span>
+          <span>1 exact lab · PyTorch + Keras</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m3-04-gan-variants.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M3 · 04</span>
+          <span class="tag">Variants</span>
+        </div>
+        <h3>GAN variants</h3>
+        <p>Walk through CycleGAN's round trip and StarGAN's domain heads; work out WGAN-GP's critic and penalty.</p>
+        <div class="module-card__meta">
+          <span>Lesson 4 of 4 · 15 min read</span>
+          <span>2 illustrative walkthroughs</span>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <section class="roadmap" id="exam-section" style="padding-top:0">
+    <div class="section-head">
+      <h2 id="exam">Module exam</h2>
+      <p>10 questions · feedback after submit</p>
+    </div>
+    <p class="small muted">
+      Covers all four M3 lessons. Answers are stored locally, so you can leave and come back.
+    </p>
+
+    <section class="quiz" data-quiz="m3-exam" data-exam="1">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "M3 module exam — generative adversarial networks",
+        "questions": [
+          {
+            "q": "What does the generator G learn in an unconditional GAN?",
+            "options": [
+              "A conditional distribution p(y|x)",
+              "A mechanism for sampling from p_data",
+              "The exact likelihood of every training image",
+              "A discriminator's decision boundary"
+            ],
+            "correct": 1,
+            "why": [
+              "That is supervised learning; GANs have no labels.",
+              "Correct: G maps noise to samples resembling the data distribution.",
+              "GANs do not expose a normalised density.",
+              "That is the discriminator's role."
+            ]
+          },
+          {
+            "q": "At a point where p_data = 0.1 and p_g = 0.3, what is the optimal discriminator D*?",
+            "options": ["0.10", "0.25", "0.30", "0.75"],
+            "correct": 1,
+            "why": [
+              "That uses only p_data.",
+              "Correct: 0.1/(0.1+0.3) = 0.25.",
+              "That uses only p_g.",
+              "That would require p_data = 0.3 and p_g = 0.1."
+            ]
+          },
+          {
+            "q": "Why do we detach G(z) in the discriminator update?",
+            "options": [
+              "To keep D's step from changing G's parameters",
+              "To turn logits into probabilities",
+              "To reduce the size of the batch",
+              "To freeze D while G trains"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: only theta_D should move in D's step.",
+              "detach changes gradient flow, not values.",
+              "The batch size is unchanged.",
+              "The G step follows separately; detach is used in the D step."
+            ]
+          },
+          {
+            "q": "At GAN equilibrium, what are D*(x) and the non-saturating generator loss?",
+            "options": [
+              "D* = 1, L_G = 0",
+              "D* = 0, L_G is undefined",
+              "D* = 1/2, L_G = log 2 ≈ 0.693",
+              "D* = p_data(x), L_G = −log 4"
+            ],
+            "correct": 2,
+            "why": [
+              "That describes a discriminator that has won, not equilibrium.",
+              "A zero D would mean G failed completely.",
+              "Correct: matching distributions make D guess, and −log(1/2)=log 2.",
+              "D* = p_data only when p_g differs; −log 4 is the game's value."
+            ]
+          },
+          {
+            "q": "A generator covers 5 of 8 data modes, and 7 of its 10 sampled clusters look real. What are recall and precision?",
+            "options": [
+              "Recall 0.70, precision 0.625",
+              "Recall 0.625, precision 0.70",
+              "Both 0.625",
+              "Both 0.70"
+            ],
+            "correct": 1,
+            "why": [
+              "The two ratios were swapped.",
+              "Correct: recall = 5/8 = 0.625, precision = 7/10 = 0.70.",
+              "Precision uses the generated clusters, not the data modes.",
+              "Recall uses the data modes, not the generated clusters."
+            ]
+          },
+          {
+            "q": "For mu_r=(1,2), mu_g=(1.5,2.5), Sigma_r=I and Sigma_g=diag(4,1), the 2-D Fréchet distance is…",
+            "options": ["0.50", "1.00", "1.50", "2.00"],
+            "correct": 2,
+            "why": [
+              "That is only the squared mean difference.",
+              "That is only the covariance trace term.",
+              "Correct: 0.50 + [(1+4−4)+(1+1−2)] = 0.50 + 1 = 1.50.",
+              "That adds an extra unit somewhere."
+            ]
+          },
+          {
+            "q": "A ConvTranspose2d layer takes a 4×4 feature map with K=4, S=2, P=1. What is the output size?",
+            "options": ["4×4", "7×7", "8×8", "9×9"],
+            "correct": 2,
+            "why": [
+              "That ignores stride and kernel size.",
+              "That is an off-by-one error.",
+              "Correct: (4−1)·2 − 2·1 + 4 = 8.",
+              "That double-counts the kernel term."
+            ]
+          },
+          {
+            "q": "Which statement about DCGAN design is correct?",
+            "options": [
+              "Use sigmoid on G's output and BatchNorm everywhere in D",
+              "Use ReLU in G except its output, LeakyReLU in D, and tanh on G's output",
+              "Use max pooling in G to grow the image",
+              "Skip normalisation entirely because it breaks convolutions"
+            ],
+            "correct": 1,
+            "why": [
+              "Sigmoid mismatches [-1,1] data and D's input should not be normalised.",
+              "Correct: these are the DCGAN rules.",
+              "G uses transposed convolutions, not pooling.",
+              "BatchNorm is standard except at G's output and D's input."
+            ]
+          },
+          {
+            "q": "In CycleGAN, with x=(1,0,−1) and F(G(x))=(0.8,0.1,−0.9), what is the weighted cycle term for lambda_cyc=10?",
+            "options": ["0.13333", "1.33333", "4.00", "2.72333"],
+            "correct": 1,
+            "why": [
+              "That is the unweighted mean L1 error.",
+              "Correct: L1 = (0.2+0.1+0.1)/3 = 0.13333, times 10 = 1.33333.",
+              "That is the sum before averaging and weighting.",
+              "That is the whole objective including two adversarial losses."
+            ]
+          },
+          {
+            "q": "In WGAN-GP, a critic has gradient norm 2 at an interpolate and lambda_GP=10. What is its penalty?",
+            "options": ["0", "2", "10", "40"],
+            "correct": 2,
+            "why": [
+              "Only a unit gradient norm gives zero penalty.",
+              "That is the norm, not the squared deviation.",
+              "Correct: 10(2−1)² = 10.",
+              "That squares the lambda as well."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+  </section>
+
+  <footer class="sitefoot">
+    <div>DeepLearn Lab · M3 GANs · static notes, built to be read offline</div>
+    <div class="hstack" style="gap:var(--s4)">
+      <a href="../../index.html">All modules</a>
+      <a href="#" data-action="search">Search</a>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </div>
+  </footer>
+</main>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m3-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

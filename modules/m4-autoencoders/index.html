@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M4 · Autoencoders and pretrained models — DeepLearn Lab</title>
+<meta name="description" content="Five interactive lessons: autoencoders and PCA, variational autoencoders, BERT, GPT decoding strategies, and a practical Hugging Face and LoRA workflow.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m4" data-lesson="" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="index.html" aria-current="page">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" style="padding-top:var(--s8)">
+    <div>
+      <p class="hero__eyebrow">Module 4 · Autoencoders and pretrained models · 5 lessons</p>
+      <h1>Compress, generate, adapt.</h1>
+      <p class="hero__lede">
+        Learn a bottleneck by reconstruction, turn it into a distribution with a VAE, read contextual
+        token vectors from BERT, control a GPT decoder, and adapt a pretrained checkpoint with LoRA.
+      </p>
+      <div class="hstack">
+        <a class="btn btn--accent" href="m4-01-autoencoders.html" style="padding:9px 14px;font-size:var(--fs-3)">Start lesson 1 →</a>
+        <a class="btn" href="#exam" style="padding:9px 14px;font-size:var(--fs-3)">Take the module exam</a>
+      </div>
+      <div class="hero__stats" style="margin-top:var(--s6)">
+        <div class="hero__stat"><b>5</b><span>lessons</span></div>
+        <div class="hero__stat"><b>7</b><span>labs</span></div>
+        <div class="hero__stat"><b>10</b><span>exam questions</span></div>
+        <div class="hero__stat"><b>0</b><span>external assets</span></div>
+      </div>
+    </div>
+    <div aria-hidden="true">
+      <svg viewBox="0 0 420 320" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
+        <defs>
+          <linearGradient id="m4edge" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".15"/>
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity=".8"/>
+          </linearGradient>
+        </defs>
+        <g stroke="url(#m4edge)" stroke-width="1.6" fill="none">
+          <path d="M40 90 Q120 30 190 160 T380 90"/>
+          <path d="M40 150 Q120 220 190 160 T380 210"/>
+          <path d="M40 210 Q120 120 190 160 T380 150"/>
+        </g>
+        <g fill="var(--surface)" stroke="var(--accent)" stroke-width="2">
+          <circle cx="40" cy="90" r="9"/><circle cx="40" cy="150" r="9"/><circle cx="40" cy="210" r="9"/>
+          <circle cx="190" cy="160" r="16" fill="var(--accent)" stroke="none"/>
+          <circle cx="380" cy="90" r="9"/><circle cx="380" cy="150" r="9"/><circle cx="380" cy="210" r="9"/>
+        </g>
+        <g font-family="ui-monospace, monospace" font-size="10" fill="var(--ink-3)">
+          <text x="24" y="268">x</text><text x="170" y="200">bottleneck</text><text x="352" y="268">z / tokens</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="section-head">
+      <h2>How to use this module</h2>
+      <p>offline · exact and illustrative labs · read in order</p>
+    </div>
+    <div class="grid3">
+      <div class="callout callout--tip" style="margin:0">
+        <p class="callout__title">Double-click a lesson</p>
+        <p>Everything runs from <code>file://</code>. No server, no account, no CDN. KaTeX is vendored
+           locally, and every lab draws from numbers computed in your browser.</p>
+      </div>
+      <div class="callout callout--bridge" style="margin:0">
+        <p class="callout__title">Read the badge first</p>
+        <p><span class="badge badge--exact">Exact</span> means the numbers are computed live.
+           <span class="badge badge--illustrative">Illustrative</span> means a stored or schematic
+           illustration — the BERT mask table and the β-VAE toy density are labelled that way.</p>
+      </div>
+      <div class="callout callout--math" style="margin:0">
+        <p class="callout__title">Notation is fixed</p>
+        <p>\(\eta\) is the learning rate, \(\lambda\) a penalty strength, \(D\) a feature width and
+           \(\mathbf z\) a latent vector. Logits are pre-softmax scores, everywhere in M0–M6.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap" id="lessons">
+    <div class="section-head">
+      <h2>The five lessons</h2>
+      <p>M4 · autoencoders and pretrained models</p>
+    </div>
+
+    <div class="module-grid">
+      <a class="module-card" href="m4-01-autoencoders.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M4 · 01</span>
+          <span class="tag">Autoencoder</span>
+        </div>
+        <h3>Autoencoders: bottlenecks, denoising, sparse</h3>
+        <p>Train a 2→k→2 bottleneck live, derive reconstruction loss and the rank argument, and see why a linear autoencoder is PCA.</p>
+        <div class="module-card__meta">
+          <span>Lesson 1 of 5 · 17 min read</span>
+          <span>2 exact labs</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m4-02-variational-autoencoders.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M4 · 02</span>
+          <span class="tag">VAE</span>
+        </div>
+        <h3>Variational autoencoders</h3>
+        <p>Derive the ELBO, compute Gaussian KL in closed form, use reparameterisation, and watch β reshape a latent cloud.</p>
+        <div class="module-card__meta">
+          <span>Lesson 2 of 5 · 18 min read</span>
+          <span>1 exact · 1 illustrative lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m4-03-bert.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M4 · 03</span>
+          <span class="tag">BERT</span>
+        </div>
+        <h3>BERT: masked language modelling and fine-tuning</h3>
+        <p>WordPiece tokens, MLM and NSP losses, contextual vectors, attention patterns and a classification head, with worked softmax arithmetic.</p>
+        <div class="module-card__meta">
+          <span>Lesson 3 of 5 · 17 min read</span>
+          <span>1 illustrative lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m4-04-gpt-and-decoding.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M4 · 04</span>
+          <span class="tag">Decoding</span>
+        </div>
+        <h3>GPT and decoding strategies</h3>
+        <p>Autoregressive factorisation, perplexity, temperature, top-k, top-p and beam search on a fixed distribution with seeded draws.</p>
+        <div class="module-card__meta">
+          <span>Lesson 4 of 5 · 18 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+
+      <a class="module-card" href="m4-05-huggingface-lora-and-decisions.html">
+        <div class="module-card__top">
+          <span class="module-card__n">M4 · 05</span>
+          <span class="tag">LoRA</span>
+        </div>
+        <h3>Hugging Face, LoRA and model decisions</h3>
+        <p>Run a pretrained pipeline, count LoRA parameters as r(d+k), work the 768/768/r=8 case by hand, and choose the right architecture.</p>
+        <div class="module-card__meta">
+          <span>Lesson 5 of 5 · 16 min read</span>
+          <span>1 exact lab</span>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <section class="roadmap" id="exam-section" style="padding-top:0">
+    <div class="section-head">
+      <h2 id="exam">Module exam</h2>
+      <p>10 questions · feedback after submit</p>
+    </div>
+    <p class="small muted">
+      Covers all five M4 lessons. Answers are stored locally, so you can leave and come back.
+    </p>
+
+    <section class="quiz" data-quiz="m4-exam" data-exam="1">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "M4 module exam — autoencoders and pretrained models",
+        "questions": [
+          {
+            "q": "A linear 10→2→10 autoencoder can reconstruct at most…",
+            "options": ["All 10 coordinates", "A 2-D subspace", "The first 2 coordinates", "Nothing at all"],
+            "correct": 1,
+            "why": [
+              "That would require rank 10, not rank 2.",
+              "Correct: rank(W_dec W_enc) ≤ 2.",
+              "The subspace is learned from data; it need not be the first two axes.",
+              "A linear autoencoder works — it is equivalent to PCA."
+            ]
+          },
+          {
+            "q": "With covariance eigenvalues λ₁=4.5, λ₂=0.5, the rank-1 PCA reconstruction MSE reduced over D=2 is…",
+            "options": ["4.5", "0.5", "0.25", "2.5"],
+            "correct": 2,
+            "why": [
+              "That is the retained variance.",
+              "That is the discarded variance before dividing by D.",
+              "Correct: λ₂/D = 0.5/2 = 0.25.",
+              "That is the mean of the two eigenvalues."
+            ]
+          },
+          {
+            "q": "The ELBO consists of…",
+            "options": ["Reconstruction likelihood plus a discriminator term", "Expected log-likelihood minus KL to the prior", "MSE plus weight decay", "KL plus classification accuracy"],
+            "correct": 1,
+            "why": [
+              "A discriminator belongs to a GAN.",
+              "Correct: E_q[log p(x|z)] − D_KL(q(z|x)‖p(z)).",
+              "Weight decay is an optimiser detail.",
+              "Accuracy is not a differentiable training objective here."
+            ]
+          },
+          {
+            "q": "For q = N(1, 1) and p = N(0, 1), D_KL(q‖p) in nats is…",
+            "options": ["0", "0.5", "1", "1.386"],
+            "correct": 1,
+            "why": [
+              "Zero requires μ = 0 and σ = 1.",
+              "Correct: ½(1 + 1 − 1 − log 1) = 0.5.",
+              "That omits the −1 term.",
+              "That is −log(0.25), a different example."
+            ]
+          },
+          {
+            "q": "With z = μ + σ ε, what is ∂z/∂σ?",
+            "options": ["1", "ε", "σ", "0"],
+            "correct": 1,
+            "why": [
+              "That is ∂z/∂μ.",
+              "Correct: σ multiplies ε, so the derivative is ε.",
+              "The variable σ is not its own derivative here.",
+              "A zero derivative is exactly what the trick avoids."
+            ]
+          },
+          {
+            "q": "For logits (2, 1, 0, −1, −2) over a 5-token vocabulary, the softmax probability of token 2 is about…",
+            "options": ["0.6366", "0.2341", "0.0861", "0.0116"],
+            "correct": 1,
+            "why": [
+              "That is token 1's probability.",
+              "Correct: exp(1)/11.610 ≈ 0.2341.",
+              "That is token 3's probability.",
+              "That is token 5's probability."
+            ]
+          },
+          {
+            "q": "A tokenizer's attention_mask marks…",
+            "options": ["Which tokens are masked for MLM", "Which positions are padding", "Which sentence is sentence B", "Which layer is the head"],
+            "correct": 1,
+            "why": [
+              "MLM masks are part of input_ids.",
+              "Correct: 0 marks padding that must not be attended to.",
+              "Segment ids distinguish the sentences.",
+              "The head lives outside the tokenizer."
+            ]
+          },
+          {
+            "q": "Sorted probabilities (0.5630, 0.2071, 0.1256, …) with top-p = 0.8 require renormalisation by S = 0.8958. The largest kept probability becomes…",
+            "options": ["0.5630", "0.6285", "0.7701", "0.8000"],
+            "correct": 1,
+            "why": [
+              "That is the unnormalised probability.",
+              "Correct: 0.5630 / 0.8958 ≈ 0.6285.",
+              "That is the cumulative mass of the first two tokens.",
+              "That is the target nucleus mass, not a token probability."
+            ]
+          },
+          {
+            "q": "Beam search normalises a candidate's log-probability sum by…",
+            "options": ["The number of beams", "The sequence length L", "The vocabulary size", "The temperature"],
+            "correct": 1,
+            "why": [
+              "The beam count is a search width, not a length.",
+              "Correct: s = (1/L) Σ log p(y_t|y_<t).",
+              "Vocabulary size does not enter the score.",
+              "Temperature belongs to sampling."
+            ]
+          },
+          {
+            "q": "For d = k = 768 and r = 8, LoRA trains how many parameters per targeted layer?",
+            "options": ["6,144", "12,288", "590,592", "147,456"],
+            "correct": 1,
+            "why": [
+              "That counts only B; A contributes r·k too.",
+              "Correct: r(d+k) = 8 × 1536 = 12,288.",
+              "That is full fine-tuning of the layer.",
+              "That is 12 adapters' worth, not one."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+  </section>
+
+  <footer class="sitefoot">
+    <div>DeepLearn Lab · M4 Autoencoders and pretrained models · static notes, built to be read offline</div>
+    <div class="hstack" style="gap:var(--s4)">
+      <a href="../../index.html">All modules</a>
+      <a href="#" data-action="search">Search</a>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </div>
+  </footer>
+</main>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m4-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

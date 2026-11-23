@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Initialization and debugging training · DeepLearn Lab</title>
+<meta name="description" content="Compute Xavier and He scales, watch activation distributions collapse at depth, and diagnose learning curves with the overfit-one-batch recipe.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m0" data-lesson="m0-04" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="index.html" aria-current="page">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 0 · Foundations</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M0 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m0-04">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M0 Foundations</a> / <span>Init &amp; debugging</span>
+    </nav>
+
+    <h1>Initialization and debugging training</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 4 of 5 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      Most training failures are decided before the first step. Get the weight scale right, then read
+      two curves to tell underfitting from a bug.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Compute Xavier and He scales from fan-in and fan-out.</li>
+        <li>Predict vanishing and exploding activations from a variance calculation.</li>
+        <li>Diagnose underfitting, overfitting and data bugs from train/validation curves.</li>
+        <li>Run the overfit-one-batch recipe as a capacity sanity check.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        Bias–variance in classical ML is diagnosed with one validation curve. In deep learning you
+        watch <em>two</em> curves — training and validation — plus the scale of activations. A model
+        that cannot overfit a single batch is broken, not merely under-regularized.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: keep the signal alive</h2>
+
+    <p>
+      Each layer multiplies its input by a matrix. If the weights are too small, the signal shrinks
+      by a constant factor at every layer and the last layer sees almost zero; the gradients shrink
+      the same way on the return trip. If the weights are too large, activations explode or saturate
+      and gradients vanish for a different reason. Good initialization keeps the variance of
+      activations roughly constant from input to output.
+    </p>
+
+    <p>
+      The rule depends on the nonlinearity. Sigmoid and tanh are roughly linear near zero, so they
+      want a variance that balances fan-in and fan-out (Xavier). ReLU zeroes half its inputs, so it
+      needs twice the variance (He). Everything else is a debugging exercise: first verify the model
+      can memorize a tiny dataset, then worry about generalization.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Init sets the scale; the learning curve tells the story. If train loss will not go to nearly
+        zero on one batch, fix the pipeline before adding data or regularization.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols</p>
+      <p>
+        \(n_{in}\), \(n_{out}\) fan-in and fan-out of a layer; \(w\) a weight; \(z_l\) pre-activation
+        at layer \(l\); \(a_l=\phi(z_l)\) its activation; \(N\) batch size; \(\eta\) learning rate;
+        \(\mathcal{L}\) loss; \(\lambda\) regularization strength; \(\varepsilon\) a small constant.
+        Assume independent weights and inputs with zero mean.
+      </p>
+    </aside>
+
+    <h3 id="variance">1 · Variance propagation</h3>
+
+    \[ \mathrm{Var}(z_l)=n_{in}\,\mathrm{Var}(w)\,\mathrm{Var}(a_{l-1}) \]
+
+    <p>
+      Worked with \(n_{in}=256\), \(\mathrm{Var}(w)=0.01\) and standardized inputs with
+      \(\mathrm{Var}(a)=1\): \(\mathrm{Var}(z)=256(0.01)(1)=2.56\), so the typical pre-activation
+      is \(\sqrt{2.56}=1.6\). Repeat with \(\mathrm{Var}(w)=10^{-4}\): \(\mathrm{Var}(z)=0.0256\)
+      and std \(0.16\); after ten such layers the variance is multiplied by
+      \(0.0256^{10}\approx1.2\times10^{-16}\) — the signal is gone.
+    </p>
+
+    <h3 id="xavier">2 · Xavier (Glorot) scale</h3>
+
+    \[ w\sim\mathcal{N}\!\left(0,\frac{2}{n_{in}+n_{out}}\right) \]
+
+    <p>
+      Worked for a \(784\to256\) layer: variance \(2/(784+256)=2/1040=0.001923\),
+      std \(=\sqrt{0.001923}=0.04385\). The forward variance is
+      \(784(0.001923)=1.5077\), std \(1.228\); the backward gain is
+      \(256(0.001923)=0.4923\). Xavier is the compromise between the two directions, which is why
+      it pairs naturally with sigmoid and tanh. Uniform Xavier uses \(U[-\sqrt{6/(n_{in}+n_{out})},\,\sqrt{6/(n_{in}+n_{out})}]\);
+      for \(784\to256\) the bound is \(\sqrt{6/1040}=0.07596\).
+    </p>
+
+    <h3 id="he">3 · He scale</h3>
+
+    \[ w\sim\mathcal{N}\!\left(0,\frac{2}{n_{in}}\right) \]
+
+    <p>
+      Same \(784\to256\) layer: variance \(2/784=0.002551\), std \(0.05051\). Forward
+      \(\mathrm{Var}(z)=784(0.002551)=2.00\), std \(1.414\). ReLU keeps only positive values, so
+      for symmetric \(z\), \(\mathrm{Var}(a)\approx\tfrac12\mathrm{Var}(z)=1.00\) — exactly the
+      scale we want to pass to the next layer.
+    </p>
+
+    <h3 id="badinit">4 · Why the naive scales fail</h3>
+
+    <p>
+      With \(w\sim\mathcal{N}(0,0.01^2)\), \(\mathrm{Var}(w)=10^{-4}\). For \(n_{in}=784\):
+      \(\mathrm{Var}(z)=0.0784\), std \(0.28\); after ten layers the variance factor is
+      \(0.0784^{10}\approx8.8\times10^{-12}\). With \(w\sim\mathcal{N}(0,10^2)\),
+      \(\mathrm{Var}(w)=100\), so \(\mathrm{Var}(z)=78400\) and std \(280\): tanh/sigmoid saturate
+      to \(\pm1\) or \(0/1\), where their derivatives are essentially zero.
+    </p>
+
+    <p>
+      A related failure is the dead ReLU. If \(z\sim\mathcal{N}(\mu,\sigma^2)\) with a large
+      negative bias \(\mu=-3,\sigma=1\), the alive fraction is
+      \(P(z&gt;0)=1-\Phi(3)\approx0.00135\), about 0.14%. Units that never activate receive zero
+      gradient forever under ReLU.
+    </p>
+
+    <h3 id="curves">5 · Reading learning curves</h3>
+
+    \[ \text{gap}=\mathcal{L}_{\text{val}}-\mathcal{L}_{\text{train}} \]
+
+    <p>
+      Worked with \(\mathcal{L}_{\text{train}}=0.02\), \(\mathcal{L}_{\text{val}}=0.85\):
+      gap \(=0.83\), a clear overfitting signature. With both losses around \(0.9\) on a 10-class
+      task the model is underfitting (chance is roughly \(2.30\) nats of cross-entropy, but the
+      shape matters more than the absolute value). A falling train loss with a rising validation
+      loss means stop early or regularize; two flat curves mean check the pipeline.
+    </p>
+
+    <p>
+      The <strong>overfit-one-batch</strong> test isolates the second case: take 32 examples, train
+      until training loss is near zero. If it will not fall, the fault is in the model, loss,
+      optimizer or data plumbing — not in the amount of data. If it does fall, capacity is fine and
+      you can work on generalization.
+    </p>
+
+    <h2 id="lab">Lab: train an MLP on toy data</h2>
+
+    <p>
+      This is the flagship lab. Pick a dataset, depth, width, activation, learning rate and
+      initialization; the network trains in a time-sliced loop while the decision boundary and both
+      loss curves update live. Try a depth of 4 with He + ReLU, then switch init to zeros and watch
+      the loss flatline.
+    </p>
+
+    <section class="lab" data-widget="m0-04-mlp-trainer" data-badge="exact"
+             data-title="MLP trainer: boundary, losses and curves"
+             data-note="Exact: DL.nn.MLP computes every forward/backward pass; the heatmap is DL.nn.gridPredict evaluated on a fresh grid and the curves are measured losses.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="init-lab">Lab: initialization at depth 10</h2>
+
+    <p>
+      Ten layers of width 64, same input draws and same underlying random numbers for every scheme.
+      Compare the activation histogram at layer 10 and the per-layer standard deviations; the table
+      reports all five schemes from the same run.
+    </p>
+
+    <section class="lab" data-widget="m0-04-init-explorer" data-badge="exact"
+             data-title="Activation histograms: zeros, naive, Xavier, He"
+             data-note="Exact: weights are sampled from DL.nn.init and every histogram and standard deviation is computed from the propagated activations.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      A complete PyTorch training loop with train/validation curves and the one-batch sanity check.
+      The synthetic target is nonlinear on purpose, so a too-shallow model visibly underfits.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+torch.manual_seed(0)
+N = 600
+X = torch.randn(N, 2)
+y = ((X[:, 0] * X[:, 1] &gt; 0).long())                # a nonlinear 2-D rule
+perm = torch.randperm(N)
+X, y = X[perm], y[perm]                              # shuffle BEFORE splitting
+Xtr, ytr = X[:480], y[:480]
+Xva, yva = X[480:], y[480:]
+
+def make_model():
+    return nn.Sequential(
+        nn.Linear(2, 32), nn.ReLU(),
+        nn.Linear(32, 32), nn.ReLU(),
+        nn.Linear(32, 2),                            # logits, shape (N, 2)
+    )
+
+model = make_model()
+opt = torch.optim.Adam(model.parameters(), lr=1e-2)  # He init is nn.Linear's default
+loss_fn = nn.CrossEntropyLoss()                      # logits in, index labels
+
+for epoch in range(1, 201):
+    model.train()                                    # dropout / batchnorm behave in train mode
+    opt.zero_grad()
+    loss = loss_fn(model(Xtr), ytr)
+    loss.backward()
+    opt.step()
+    if epoch % 40 == 0:
+        model.eval()                                 # freeze BN statistics, disable dropout
+        with torch.no_grad():                        # no graph needed for evaluation
+            tr = loss_fn(model(Xtr), ytr).item()
+            va = loss_fn(model(Xva), yva).item()
+            acc = (model(Xva).argmax(dim=1) == yva).float().mean().item()
+        print(f"epoch {epoch:3d}  train {tr:.4f}  val {va:.4f}  val acc {acc:.3f}")
+
+# Capacity check: if this does not go to ~0, debug the pipeline before tuning anything.
+probe = make_model()
+probe_opt = torch.optim.Adam(probe.parameters(), lr=1e-2)
+for step in range(200):
+    probe_opt.zero_grad()
+    l = loss_fn(probe(Xtr[:32]), ytr[:32])
+    l.backward()
+    probe_opt.step()
+print("one-batch loss", round(l.item(), 6))          # expect close to zero</code></pre>
+      </div>
+    </div>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title"><code>randn * 0.01</code></p>
+        <p>
+          A classic but badly scaled default. With hundreds of fan-in weights the pre-activations
+          shrink toward zero, gradients vanish and the loss barely moves. Use Xavier or He.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title"><code>randn * 10</code></p>
+        <p>
+          The opposite failure: saturated sigmoids, huge ReLU outputs and exploding gradients.
+          If the first batch produces a loss in the thousands, inspect the init scale first.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Missing <code>model.train()</code></p>
+        <p>
+          Dropout and batch normalization behave differently in train and eval mode. Forgetting
+          <code>model.eval()</code> at validation makes metrics jump; forgetting
+          <code>model.train()</code> afterwards quietly disables regularization.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Leakage through normalization</p>
+        <p>
+          Computing mean and variance on the full dataset before splitting leaks validation
+          statistics into training. Fit scalers on the training split only, then apply them to
+          validation.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A 10-class classifier reports about 10% validation accuracy even though its training loss
+      falls. The model has enough capacity and the optimizer is Adam with a sensible learning rate.
+      The data loader does this:
+      <code>X_train = X[:900]</code>, <code>y_train = y[:900]</code>, but the labels were sorted
+      before that line.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The labels were not shuffled together with the inputs. The first 900 rows may all belong to
+        one or two classes, so the network learns a constant prediction and validation accuracy sits
+        at chance. Apply the same random permutation to both arrays before splitting, or use a
+        <code>DataLoader</code> with <code>shuffle=True</code> over a <code>TensorDataset</code>.
+      </p>
+      <p class="small muted">
+        Quick check: print <code>torch.bincount(y_train)</code>. If it is concentrated in one or two
+        bins while the full label histogram is balanced, the split — not the model — is the bug.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m0-04">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — initialization and debugging",
+        "questions": [
+          {
+            "q": "For a 784→256 layer, what is the Xavier (normal) standard deviation?",
+            "options": ["0.0250", "0.0439", "0.0505", "0.0759"],
+            "correct": 1,
+            "why": [
+              "That would be 1/√1600, not the Xavier variance 2/(784+256).",
+              "Correct: √(2/1040) ≈ 0.04385.",
+              "That is He for fan-in 784: √(2/784).",
+              "That is the Xavier uniform bound, not the normal standard deviation."
+            ]
+          },
+          {
+            "q": "He initialization uses variance 2/n_in mainly because ReLU…",
+            "options": [
+              "Is bounded above by one",
+              "Has zero derivative for negative pre-activations, roughly halving the variance",
+              "Is cheaper to compute than sigmoid",
+              "Needs biases initialized to zero"
+            ],
+            "correct": 1,
+            "why": [
+              "ReLU is unbounded above; that is not the reason.",
+              "Correct: Var(ReLU(z)) ≈ ½Var(z) for symmetric z, so doubling w's variance compensates.",
+              "Cost is irrelevant to the variance argument.",
+              "Bias initialization is a separate choice."
+            ]
+          },
+          {
+            "q": "With w ~ N(0, 0.01²) and fan-in 784, what is Var(z) before the activation?",
+            "options": ["0.0784", "0.28", "7.84", "0.0025"],
+            "correct": 0,
+            "why": [
+              "Correct: 784 × 0.0001 = 0.0784; the std is 0.28.",
+              "That is the standard deviation, not the variance.",
+              "That would require Var(w) = 0.01, not 0.0001.",
+              "That uses fan-in 25 instead of 784."
+            ]
+          },
+          {
+            "q": "What is the purpose of the overfit-one-batch test?",
+            "options": [
+              "To measure generalization on a held-out set",
+              "To prove the model and pipeline can fit data at all",
+              "To tune weight decay precisely",
+              "To reduce training time"
+            ],
+            "correct": 1,
+            "why": [
+              "A single batch says nothing about generalization.",
+              "Correct: if a tiny batch cannot be memorized, the model, loss or data plumbing is broken.",
+              "Regularization tuning comes after capacity is verified.",
+              "It usually adds a short extra run, not a speedup."
+            ]
+          },
+          {
+            "q": "Training loss 0.02 and validation loss 0.85 (gap 0.83) most likely means…",
+            "options": ["Underfitting", "Overfitting", "A broken gradient", "A too-small learning rate"],
+            "correct": 1,
+            "why": [
+              "Underfitting shows high loss on both splits.",
+              "Correct: a large train–validation gap with low train loss is the overfitting signature.",
+              "A broken gradient would keep the training loss high too.",
+              "A small learning rate would slow both curves, not separate them."
+            ]
+          },
+          {
+            "q": "Which pair correctly matches activation to initialization?",
+            "options": [
+              "sigmoid → He", "tanh → zeros", "ReLU → He", "linear → Xavier only"
+            ],
+            "correct": 2,
+            "why": [
+              "He is designed for ReLU's half-zero variance; sigmoid works better with Xavier.",
+              "Zero initialization prevents a linear layer from breaking symmetry.",
+              "Correct: He's 2/n_in compensates for ReLU halving the variance.",
+              "Xavier is a reasonable default for linear/tanh, but 'only' is false."
+            ]
+          },
+          {
+            "q": "Why must normalization statistics be fit on the training split only?",
+            "options": [
+              "Because validation data is smaller",
+              "Otherwise validation statistics leak into training and inflate measured performance",
+              "Because mean and variance are undefined on validation data",
+              "Because PyTorch cannot normalise more than one tensor"
+            ],
+            "correct": 1,
+            "why": [
+              "Size is not the issue; leakage is.",
+              "Correct: using full-dataset statistics lets information from the held-out set enter training.",
+              "Validation statistics are perfectly well defined; using them is the leak.",
+              "Frameworks can normalize any tensor; this is a methodology rule."
+            ]
+          },
+          {
+            "q": "A ReLU unit has pre-activation z ~ N(−3, 1). Approximately what fraction of samples activate it?",
+            "options": ["50%", "16%", "0.14%", "100%"],
+            "correct": 2,
+            "why": [
+              "That would require a zero mean.",
+              "That corresponds to z ~ N(−1, 1).",
+              "Correct: P(z > 0) = 1 − Φ(3) ≈ 0.00135.",
+              "A negative mean makes most samples inactive."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Keep variance stable: Var(z) = n_in Var(w) Var(a), giving Xavier 2/(n_in+n_out) for tanh/sigmoid and He 2/n_in for ReLU.<br>
+        2 · Too-small weights vanish the signal; too-large weights saturate or explode; zeros break symmetry completely.<br>
+        3 · Verify capacity with one batch, then read train and validation curves: a large gap means overfitting, two flat curves mean a pipeline bug.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m0-04">
+      <h2>Cheat sheet — M0·04</h2>
+      <ul>
+        <li>\(\mathrm{Var}(z_l)=n_{in}\mathrm{Var}(w)\mathrm{Var}(a_{l-1})\).</li>
+        <li>Xavier normal: \(\sigma=\sqrt{2/(n_{in}+n_{out})}\) — 0.0439 for 784→256.</li>
+        <li>He normal: \(\sigma=\sqrt{2/n_{in}}\) — 0.0505 for 784→256.</li>
+        <li>Naive \(\sigma=0.01\): Var(z)=0.0784 at fan-in 784 — vanishing.</li>
+        <li>Naive \(\sigma=10\): Var(z)=78,400 — saturation and explosion.</li>
+        <li>Overfit one batch first; then compare \(\mathcal{L}_{val}-\mathcal{L}_{train}\).</li>
+        <li>Always shuffle inputs and labels together before splitting; fit scalers on train only.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Glorot, X. — <em>Understanding the Difficulty of Training Deep Feedforward Neural Networks</em> (2010).</li>
+      <li>He, K. — <em>Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification</em> (2015).</li>
+      <li>Srivastava, N. — <em>Dropout: A Simple Way to Prevent Neural Networks from Overfitting</em> (2014).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m0-03-gradient-descent-and-optimizers.html">← Optimizers</a>
+      <a href="m0-05-pytorch-workflow.html">Next: PyTorch workflow →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M0 Foundations</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m0-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

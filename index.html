@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepLearn Lab · interactive deep learning notes</title>
+<meta name="description" content="Seven modules of visual, interactive deep learning notes: CNNs, RNNs, transformers, GANs, VAEs, segmentation and a Kaggle playbook. Works offline.">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<link rel="stylesheet" href="assets/css/print.css">
+<script>
+  /* Theme boot: ?theme=light|dark overrides storage (used for visual QA). */
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-root="" data-module="">
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="index.html">
+    <span class="topbar__mark">DL</span> <span>DeepLearn Lab</span>
+  </a>
+  <nav class="topbar__nav" aria-label="Modules">
+    <a href="modules/m0-foundations/index.html">M0 Foundations</a>
+    <a href="modules/m1-cnns/index.html">M1 CNNs</a>
+    <a href="modules/m2-sequences/index.html">M2 Sequences</a>
+    <a href="modules/m3-gans/index.html">M3 GANs</a>
+    <a href="modules/m4-autoencoders/index.html">M4 AE &amp; LLMs</a>
+    <a href="modules/m5-segmentation/index.html">M5 Segmentation</a>
+    <a href="modules/m6-toolkit/index.html">M6 Toolkit</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <div>
+      <p class="hero__eyebrow">Interactive notes · 5-day deep learning sprint</p>
+      <h1>See the <em>tensors</em> move.</h1>
+      <p class="hero__lede">
+        A complete, offline deep learning course for people who already know scikit-learn.
+        Every idea comes with a lab that computes the real thing — convolutions on your own
+        pixels, gradients from a real backward pass, a GAN training in your browser.
+      </p>
+      <div class="hstack">
+        <a class="btn btn--accent" href="modules/m0-foundations/m0-01-perceptron-to-mlp.html"
+           style="padding:9px 14px;font-size:var(--fs-3)">Start with M0 →</a>
+        <a class="btn" href="#roadmap" style="padding:9px 14px;font-size:var(--fs-3)">See the roadmap</a>
+      </div>
+      <div class="hero__stats" style="margin-top:var(--s6)">
+        <div class="hero__stat"><b>7</b><span>modules</span></div>
+        <div class="hero__stat"><b data-total-lessons>40</b><span>lessons</span></div>
+        <div class="hero__stat"><b>64</b><span>labs</span></div>
+        <div class="hero__stat"><b>0</b><span>external assets</span></div>
+      </div>
+    </div>
+
+    <div aria-hidden="true">
+      <svg viewBox="0 0 420 320" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
+        <defs>
+          <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".15"/>
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity=".75"/>
+          </linearGradient>
+        </defs>
+        <g stroke="url(#edge)" stroke-width="1">
+          <path d="M60 70 L160 40"/><path d="M60 70 L160 100"/><path d="M60 70 L160 160"/>
+          <path d="M60 160 L160 40"/><path d="M60 160 L160 100"/><path d="M60 160 L160 160"/>
+          <path d="M60 250 L160 100"/><path d="M60 250 L160 160"/><path d="M60 250 L160 220"/>
+          <path d="M160 40 L270 100"/><path d="M160 100 L270 100"/><path d="M160 160 L270 100"/>
+          <path d="M160 220 L270 160"/><path d="M160 160 L270 220"/>
+          <path d="M270 100 L370 160"/><path d="M270 160 L370 160"/><path d="M270 220 L370 160"/>
+        </g>
+        <g fill="var(--surface)" stroke="var(--accent)" stroke-width="2">
+          <circle cx="60" cy="70" r="13"/><circle cx="60" cy="160" r="13"/><circle cx="60" cy="250" r="13"/>
+          <circle cx="160" cy="40" r="13"/><circle cx="160" cy="100" r="13"/>
+          <circle cx="160" cy="160" r="13"/><circle cx="160" cy="220" r="13"/>
+          <circle cx="270" cy="100" r="13"/><circle cx="270" cy="160" r="13"/><circle cx="270" cy="220" r="13"/>
+          <circle cx="370" cy="160" r="15" fill="var(--accent)" stroke="none"/>
+        </g>
+        <g font-family="ui-monospace, monospace" font-size="10" fill="var(--ink-3)">
+          <text x="34" y="300">input</text><text x="140" y="300">hidden</text>
+          <text x="252" y="300">hidden</text><text x="352" y="300">logits</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section class="dayplan" aria-label="Five day plan">
+    <div class="dayplan__inner">
+      <div class="dayplan__day"><b>DAY 1</b><span>CNNs from convolution maths to ResNets, detection and transfer learning.</span></div>
+      <div class="dayplan__day"><b>DAY 2</b><span>RNNs, BPTT, LSTM/GRU, tokenizers, embeddings, attention and transformers.</span></div>
+      <div class="dayplan__day"><b>DAY 3</b><span>GAN objectives, DCGAN, mode collapse, FID, CycleGAN and WGAN-GP.</span></div>
+      <div class="dayplan__day"><b>DAY 4</b><span>Autoencoders, VAEs, BERT, GPT decoding, LoRA and pretrained workflow.</span></div>
+      <div class="dayplan__day"><b>DAY 5</b><span>Segmentation (U-Net, Mask R-CNN) and an end-to-end Kaggle playbook.</span></div>
+    </div>
+  </section>
+
+  <section class="roadmap" id="roadmap">
+    <div class="section-head">
+      <h2>Roadmap</h2>
+      <p>7 modules · 40 lessons · 64 labs</p>
+    </div>
+
+    <div class="module-grid" id="moduleGrid">
+      <!-- cards are rendered by script so progress rings stay in sync -->
+    </div>
+  </section>
+
+  <section class="roadmap" style="padding-top:0">
+    <div class="section-head">
+      <h2>How to use this site</h2>
+      <p>offline · no account · no build step</p>
+    </div>
+    <div class="grid3">
+      <div class="callout callout--tip" style="margin:0">
+        <p class="callout__title">Double-click index.html</p>
+        <p>Everything runs from <code>file://</code>. No server, no network, no CDN.
+           KaTeX is vendored locally; all visuals are drawn on canvas from data you can see.</p>
+      </div>
+      <div class="callout callout--bridge" style="margin:0">
+        <p class="callout__title">Read the badge first</p>
+        <p><span class="badge badge--exact">Exact math</span> means the numbers are computed in your browser.
+           <span class="badge badge--illustrative">Illustrative</span> means schematic or precomputed — and says so.</p>
+      </div>
+      <div class="callout callout--math" style="margin:0">
+        <p class="callout__title">Order matters</p>
+        <p>M0 sets the notation used everywhere else. After that, M1→M5 follow the five days;
+           M6 is a reference toolkit you can jump into at any point.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="sitefoot">
+  <div>DeepLearn Lab · static notes · built to be read offline</div>
+  <div class="hstack" style="gap:var(--s4)">
+    <a href="modules/m6-toolkit/index.html">Glossary</a>
+    <a href="#" data-action="search">Search</a>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</footer>
+
+<script defer src="assets/js/core.js"></script>
+<script defer src="assets/js/store.js"></script>
+<script defer src="assets/js/progress.js"></script>
+<script defer src="assets/js/search-index.js"></script>
+<script defer src="assets/data/glossary.js"></script>
+<script defer src="assets/js/landing.js"></script>
+<script defer src="assets/js/lesson.js"></script>
+</body>
+</html>

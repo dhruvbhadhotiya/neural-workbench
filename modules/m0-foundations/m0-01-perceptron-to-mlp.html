@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>From perceptron to multilayer networks · DeepLearn Lab</title>
+<meta name="description" content="Why one linear unit cannot solve XOR, how a hidden layer fixes it, and what the universal approximation theorem does and does not promise.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m0" data-lesson="m0-01" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="index.html" aria-current="page">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 0 · Foundations</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M0 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m0-01">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M0 Foundations</a> / <span>Perceptron → MLP</span>
+    </nav>
+
+    <h1>From perceptron to multilayer networks</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 1 of 5 <span class="dot">·</span>
+      <span class="badge badge--exact">Exact math</span> labs
+    </p>
+    <p class="lede">
+      One neuron draws a straight line. Stack two layers and the line becomes a shape —
+      this lesson shows exactly where that extra power comes from, with arithmetic you can check.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Show, with numbers, that no single linear unit can compute XOR.</li>
+        <li>Build a 2→2→1 ReLU network by hand that outputs <span class="mono">0,1,1,0</span>.</li>
+        <li>Explain what the universal approximation theorem promises — and what it does not.</li>
+        <li>Count parameters and predict the effect of removing the nonlinearity.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        Logistic regression <em>is</em> a single neuron: a weighted sum followed by a sigmoid,
+        trained with cross-entropy. Nothing changes in that sentence except that we now stack
+        many of them and choose other squashing functions. The new ingredient is the
+        <strong>hidden layer</strong>, which lets the model bend its decision boundary.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a neuron is a line, a layer is a shape</h2>
+
+    <p>
+      A single unit computes \( z = w_1x_1 + w_2x_2 + b \), then squashes \(z\) through a
+      nonlinearity. Ignoring the squash, the surface where the output flips sign is
+      \( w_1x_1 + w_2x_2 + b = 0 \) — a straight line. So whatever the weights, one neuron
+      can only split the plane in two halves.
+    </p>
+
+    <p>
+      XOR is the classic counter-example. Label the corners of the unit square:
+      \((0,0)\) and \((1,1)\) are class 0; \((0,1)\) and \((1,0)\) are class 1.
+      The two classes sit on diagonally opposite corners, so every straight line that
+      separates one pair puts the other pair on the same side. Drag the sliders below and
+      watch the accuracy readout refuse to reach 4/4.
+    </p>
+
+    <section class="lab" data-widget="m0-01-neuron-playground" data-badge="exact"
+             data-title="One neuron on the XOR plane"
+             data-note="Exact: the shading is p = σ(w₁x₁ + w₂x₂ + b) evaluated on a 44×34 grid in your browser. Click the canvas to move the probe.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      The background is the sigmoid of the pre-activation, so it fades smoothly from surface to
+      accent. The black line is the exact boundary \(z=0\). A single line can cut off at most one
+      corner of the square, so one of the four points is always on the wrong side: 3/4 is the
+      ceiling and the readout shows it.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Depth, not width, is what turns lines into polygons. Each hidden unit contributes one
+        straight cut; their ReLU combination glues half-planes into a piecewise-linear region.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="affine">1 · One layer is an affine map</h3>
+
+    <p>For a column vector of inputs \(x\in\mathbb{R}^{n_{in}}\):</p>
+
+    \[ z = Wx + b, \qquad W \in \mathbb{R}^{n_{out}\times n_{in}},\; b\in\mathbb{R}^{n_{out}} \]
+    \[ a = \phi(z) \]
+
+    <p>
+      \(W\) has one row per output unit; row \(i\) holds that unit's weights.
+      A 2→4 layer therefore holds \(2\cdot4 = 8\) weights and \(4\) biases: 12 numbers.
+    </p>
+
+    <h3 id="compose">2 · Stacking composes the maps</h3>
+
+    \[ f(x) = W_2\,\phi\!\left(W_1x + b_1\right) + b_2 \]
+
+    <p>
+      Without \(\phi\) this collapses: \(W_2(W_1x+b_1)+b_2 = (W_2W_1)x + (W_2b_1+b_2)\),
+      which is just another affine map. <strong>The nonlinearity is the entire source of
+      extra capacity.</strong> That single fact explains most “my network behaves like a
+      linear model” bugs.
+    </p>
+
+    <h3 id="xor">3 · XOR by hand</h3>
+
+    <p>
+      Take two ReLU hidden units and the inputs in \(\{0,1\}^2\). Choose
+    </p>
+
+    \[ h_1 = \mathrm{ReLU}(x_1 + x_2), \qquad h_2 = \mathrm{ReLU}(x_1 + x_2 - 1), \qquad y = h_1 - 2h_2 \]
+
+    <p>Evaluating each corner from the formulas:</p>
+
+    <table class="shape-table">
+      <caption>Hand-computed XOR with two ReLU units</caption>
+      <thead>
+        <tr><th>\(x_1\)</th><th>\(x_2\)</th><th>\(x_1+x_2\)</th><th>\(h_1\)</th><th>\(h_2\)</th><th>\(y=h_1-2h_2\)</th><th>target</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>0</td><td>1</td><td>1</td><td>1</td><td>0</td><td>1</td><td>1</td></tr>
+        <tr><td>1</td><td>0</td><td>1</td><td>1</td><td>0</td><td>1</td><td>1</td></tr>
+        <tr><td>1</td><td>1</td><td>2</td><td>2</td><td>1</td><td>0</td><td>0</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Every row matches. Written as matrices with \(s = x_1+x_2\):
+      \(W_1 = \begin{bmatrix}1&1\\1&1\end{bmatrix}\),
+      \(b_1 = \begin{bmatrix}0\\-1\end{bmatrix}\),
+      \(W_2 = \begin{bmatrix}1&-2\end{bmatrix}\), \(b_2 = 0\).
+      Note that \(y > 0.5\) exactly when \(0.5 < s < 1.5\) — a band, not a half-plane.
+      Two ReLUs bought us a stripe.
+    </p>
+
+    <p>Parameter count for this 2→2→1 network:</p>
+
+    \[ \underbrace{(2\cdot 2 + 2)}_{6} + \underbrace{(2\cdot 1 + 1)}_{3} = 9 \]
+
+    <h3 id="activations">4 · Choosing the nonlinearity</h3>
+
+    <p>
+      The derivative is what backpropagation multiplies through, so the shape of
+      \(\phi'\) matters more than the shape of \(\phi\). ReLU has derivative exactly 0 or 1;
+      sigmoid and tanh squeeze it below 1 and shrink gradients with depth; GELU and swish are
+      smooth compromises used in transformers.
+    </p>
+
+    <section class="lab" data-widget="m0-01-activation-explorer" data-badge="exact"
+             data-title="Activations and their derivatives"
+             data-note="Exact: f and f′ are evaluated from DL.nn.act at every sample; the readouts show f(1.5) and f′(1.5).">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Watch ReLU at \(x=0\): the function is continuous but the derivative jumps from 0 to 1.
+      Our implementation returns 0 there, which is the usual convention — it does not matter
+      in practice because the probability of landing exactly on 0 is nil.
+    </p>
+
+    <h3 id="uat">5 · Universal approximation, stated carefully</h3>
+
+    <p>
+      A network with a single hidden layer and enough units can approximate any continuous
+      function on a compact set to arbitrary accuracy (Cybenko 1989; Hornik 1991). Formally,
+      for every \(\varepsilon>0\) there exist \(N\) and weights such that
+      \(\sup_{x\in K}\lVert f(x)-g(x)\rVert<\varepsilon\).
+    </p>
+
+    <p>Read the quantifiers in order, because they are the whole story:</p>
+    <ul>
+      <li>“<strong>there exist</strong> weights” — the theorem says nothing about whether gradient descent finds them.</li>
+      <li>“<strong>enough units</strong>” — \(N\) may be astronomically large; it is not a recipe.</li>
+      <li>“<strong>continuous</strong> on a compact set” — no promise outside the region you trained on.</li>
+    </ul>
+
+    <p>
+      In practice depth beats width: a deep ReLU network represents the same function with far
+      fewer parameters than a shallow one. That is the empirical reason the rest of this course
+      is about architecture, not about ever-wider single layers.
+    </p>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      The hand-built network above, trained from scratch in PyTorch. The only subtlety is the
+      loss: for a binary output with logits, use <code>BCEWithLogitsLoss</code>, which fuses the
+      sigmoid and the log for numerical stability.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+
+torch.manual_seed(0)
+
+X = torch.tensor([[0., 0.], [0., 1.], [1., 0.], [1., 1.]])
+y = torch.tensor([[0.], [1.], [1.], [0.]])
+
+model = nn.Sequential(
+    nn.Linear(2, 4),   # 2*4 + 4 = 12 parameters
+    nn.ReLU(),
+    nn.Linear(4, 1),   # 4*1 + 1 = 5 parameters
+)
+loss_fn = nn.BCEWithLogitsLoss()
+opt = torch.optim.Adam(model.parameters(), lr=0.05)
+
+for step in range(500):
+    opt.zero_grad()                 # gradients accumulate otherwise
+    logits = model(X)               # shape (4, 1), no sigmoid here
+    loss = loss_fn(logits, y)       # sigmoid + BCE fused
+    loss.backward()
+    opt.step()
+
+with torch.no_grad():
+    p = torch.sigmoid(model(X)).squeeze(1)
+    pred = (p &gt; 0.5).long()
+
+print(f"loss {loss.item():.4f}")
+print("probabilities", [round(v, 4) for v in p.tolist()])
+print("predictions  ", pred.tolist())   # [0, 1, 1, 0]
+print("parameters   ", sum(q.numel() for q in model.parameters()))  # 17</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+
+tf.random.set_seed(0)
+
+X = tf.constant([[0., 0.], [0., 1.], [1., 0.], [1., 1.]])
+y = tf.constant([[0.], [1.], [1.], [0.]])
+
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(4, activation="relu", input_shape=(2,)),
+    tf.keras.layers.Dense(1),          # logits: no activation
+])
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(0.05),
+    loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+    metrics=["accuracy"],
+)
+model.fit(X, y, epochs=200, verbose=0)
+
+probs = tf.sigmoid(model(X)).numpy().ravel()
+print((probs &gt; 0.5).astype(int))        # [0 1 1 0]
+print(model.count_params())              # 17</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      Two runs will not print identical digits: Adam starts from random weights. Both should
+      reach four correct predictions within a few hundred steps on this toy problem.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">No nonlinearity</p>
+        <p>
+          <code>Linear → Linear → Linear</code> is one matrix. Training loss falls, accuracy stalls
+          at whatever the linear model can do. If your deep net matches logistic regression
+          exactly, check the activation first.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Sigmoid twice</p>
+        <p>
+          Pairing <code>sigmoid</code> in the model with <code>BCEWithLogitsLoss</code> computes
+          σ twice and saturates. Either output logits and use the fused loss, or output
+          probabilities and use plain <code>BCELoss</code> — never both.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Forgetting <code>zero_grad()</code></p>
+        <p>
+          PyTorch adds new gradients to the existing <code>.grad</code> buffers. Skip the reset
+          and the effective step size grows every iteration until the loss explodes.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Blaming the optimizer</p>
+        <p>
+          On a 17-parameter toy problem, Adam, SGD with momentum, and plain SGD all solve XOR.
+          If one of them does not, the bug is in the data, the loss, or the shapes.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “my 2→4→1 network stays at exactly 50% accuracy on XOR and the loss
+      barely moves.” The code is the PyTorch listing above with one line changed.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The activation was dropped — either deleted, or replaced by <code>nn.Identity()</code>.
+        Two stacked linear layers are still linear, so the model can only place one straight
+        boundary, and XOR is symmetric enough that a straight boundary through the middle gets
+        exactly 2 of 4 points right no matter where it sits. Restore <code>nn.ReLU()</code>
+        between the layers and the loss will start moving within a few dozen steps.
+      </p>
+      <p class="small muted">
+        Second most likely: labels are shape <code>(4,)</code> while logits are
+        <code>(4, 1)</code>, and broadcasting silently trains on the wrong pairs. Print both
+        shapes before blaming the optimizer.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m0-01">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — perceptron to MLP",
+        "questions": [
+          {
+            "q": "Why can a single neuron not compute XOR?",
+            "options": [
+              "Its sigmoid saturates on inputs 0 and 1",
+              "Its decision boundary is a single straight line, and XOR is not linearly separable",
+              "It has too few parameters (only two weights)",
+              "Sigmoid outputs are bounded in (0,1) instead of {0,1}"
+            ],
+            "correct": 1,
+            "why": [
+              "Saturation is a numerical nuisance, not the structural reason.",
+              "Correct: w·x + b = 0 is a hyperplane; XOR's classes are on opposite diagonals.",
+              "Adding weights gives more lines' worth of freedom only in higher dimensions, not in 2-D.",
+              "Bounded outputs are exactly what a probability needs; thresholding fixes the rest."
+            ]
+          },
+          {
+            "q": "A 2→4→1 network with ReLU hidden units and a linear output has how many learnable parameters?",
+            "options": ["8", "12", "17", "21"],
+            "correct": 2,
+            "why": [
+              "That counts only the first layer's weights.",
+              "That counts the first layer plus its bias only.",
+              "Correct: (2·4 + 4) + (4·1 + 1) = 12 + 5 = 17.",
+              "Adds a bias where none exists."
+            ]
+          },
+          {
+            "q": "What is the derivative of ReLU at x = 0 in this course's implementation?",
+            "options": ["0", "0.5", "1", "Undefined — it throws"],
+            "correct": 0,
+            "why": [
+              "Correct: we define df(0) = 0, following the x > 0 convention.",
+              "That is the subgradient midpoint, rarely used in practice.",
+              "That is the slope for x > 0.",
+              "No implementation throws; a value must be returned for backprop."
+            ]
+          },
+          {
+            "q": "Removing every nonlinearity from a 3-layer network turns it into…",
+            "options": [
+              "A deeper nonlinear model",
+              "A single affine map Wx + b",
+              "A quadratic function of the input",
+              "An untrainable model"
+            ],
+            "correct": 1,
+            "why": [
+              "Depth without nonlinearity adds no expressive power.",
+              "Correct: composing affine maps yields one affine map.",
+              "Products of inputs never appear without a nonlinearity.",
+              "It trains fine — it just cannot represent anything a perceptron cannot."
+            ]
+          },
+          {
+            "q": "The universal approximation theorem guarantees which of the following?",
+            "options": [
+              "Gradient descent will find the approximating weights",
+              "A sufficiently wide single hidden layer can approximate any continuous function on a compact set",
+              "The network will generalise to unseen data",
+              "Depth never helps compared with width"
+            ],
+            "correct": 1,
+            "why": [
+              "The theorem is about existence of weights, not about optimisation.",
+              "Correct — and it says nothing about how many units or how to find them.",
+              "Generalisation depends on data and regularisation, not on this theorem.",
+              "In practice depth is far more parameter-efficient; the theorem only covers width."
+            ]
+          },
+          {
+            "q": "Why does a bias term b matter for a single neuron?",
+            "options": [
+              "It normalises the input features",
+              "It shifts the decision boundary away from the origin",
+              "It guarantees the output is a valid probability",
+              "It makes the loss convex"
+            ],
+            "correct": 1,
+            "why": [
+              "Normalisation is a preprocessing step, unrelated to b.",
+              "Correct: without b the boundary must pass through the origin.",
+              "The sigmoid handles that, with or without b.",
+              "Convexity depends on the loss and model class, not the bias."
+            ]
+          },
+          {
+            "q": "For the hand-built XOR solution h₁ = ReLU(x₁+x₂), h₂ = ReLU(x₁+x₂−1), y = h₁ − 2h₂, what is y at (1, 1)?",
+            "options": ["0", "1", "2", "−1"],
+            "correct": 0,
+            "why": [
+              "Correct: h₁ = 2, h₂ = 1, y = 2 − 2 = 0.",
+              "That is the value at (0,1) and (1,0).",
+              "That is h₁, not y.",
+              "y is never negative for these inputs."
+            ]
+          },
+          {
+            "q": "You see training loss fall smoothly while accuracy sits at exactly 50% on a balanced binary task. Which check comes first?",
+            "options": [
+              "Increase the learning rate",
+              "Add more layers",
+              "Verify the model can represent the labels at all — likely a missing activation or a linear model",
+              "Switch from Adam to SGD"
+            ],
+            "correct": 2,
+            "why": [
+              "A larger step cannot fix a model class that cannot separate the data.",
+              "More of the same linear stack is still linear.",
+              "Correct: 50% on balanced data is the signature of a model with no usable nonlinearity.",
+              "Optimizer choice rarely turns 50% into 100% on XOR."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · A neuron computes an affine map plus a nonlinearity; its boundary is one hyperplane.<br>
+        2 · A hidden layer composes many hyperplanes; ReLU glues them into piecewise-linear regions, which is how XOR becomes representable with 9 parameters.<br>
+        3 · Universal approximation promises existence, not learnability — depth buys the same functions with fewer parameters.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m0-01">
+      <h2>Cheat sheet — M0·01</h2>
+      <ul>
+        <li>\(z = Wx+b\), \(a=\phi(z)\); parameters of a layer: \(n_{in}n_{out}+n_{out}\).</li>
+        <li>Without \(\phi\): \(W_2(W_1x+b_1)+b_2\) collapses to one affine map.</li>
+        <li>XOR: \(h_1=\mathrm{ReLU}(x_1+x_2)\), \(h_2=\mathrm{ReLU}(x_1+x_2-1)\), \(y=h_1-2h_2\).</li>
+        <li>2→4→1 MLP: 17 parameters. 2→2→1: 9.</li>
+        <li>Logits in, <code>BCEWithLogitsLoss</code> out — never sigmoid twice.</li>
+        <li>\(\mathrm{ReLU}'(0)=0\) by convention; sigmoid′ ≤ 0.25, tanh′ ≤ 1.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Rosenblatt, F. — <em>The Perceptron: A Probabilistic Model for Information Storage and Organization in the Brain</em> (1958).</li>
+      <li>Cybenko, G. — <em>Approximation by Superpositions of a Sigmoidal Function</em> (1989).</li>
+      <li>Hornik, K. — <em>Approximation Capabilities of Multilayer Feedforward Networks</em> (1991).</li>
+      <li>Goodfellow, Bengio &amp; Courville — <em>Deep Learning</em>, chapters 6–7 (2016).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="index.html">← Module overview</a>
+      <a href="m0-02-losses-and-backprop.html">Next: losses &amp; backprop →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M0 Foundations</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m0-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

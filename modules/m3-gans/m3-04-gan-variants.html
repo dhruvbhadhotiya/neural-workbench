@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GAN variants: CycleGAN, StarGAN, WGAN-GP · DeepLearn Lab</title>
+<meta name="description" content="Place CycleGAN, Pix2Pix, StarGAN, WGAN-GP and StyleGAN on the supervision axis, with worked cycle, critic and gradient-penalty arithmetic.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m3" data-lesson="m3-04" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="index.html" aria-current="page">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 3 · Generative models</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M3 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m3-04">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M3 GANs</a> / <span>GAN variants</span>
+    </nav>
+
+    <h1>GAN variants: what supervision do you have?</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 4 of 4 <span class="dot">·</span>
+      <span class="badge badge--illustrative">Illustrative</span> walkthroughs
+    </p>
+    <p class="lede">
+      Paired images, unpaired domains, multiple attributes or no labels at all: each constraint
+      produces a different GAN. Work through their objectives and know which one to reach for.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Derive the cycle-consistency and identity losses and explain what each prevents.</li>
+        <li>Explain WGAN's 1-Lipschitz critic and compute a gradient-penalty term by hand.</li>
+        <li>Describe StarGAN's single generator and multi-head discriminator, plus PatchGAN and StyleGAN in one sentence each.</li>
+        <li>Place Pix2Pix, CycleGAN, StarGAN and unconditional GANs on the supervision axis.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        Conditional GANs need labels; a cGAN needs matched \((x,y)\) pairs. Real projects rarely
+        have them. CycleGAN works with <em>unpaired</em> domains by demanding that going there and
+        back returns you home; WGAN changes the loss to a distance with better-behaved gradients.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: a map of the variants</h2>
+
+    <p>
+      <strong>Pix2Pix</strong> needs paired images: for every sketch there is the exact photo.
+      <strong>CycleGAN</strong> needs only two sets of images (horses, zebras) with no correspondences.
+      <strong>StarGAN</strong> handles several domains with one generator conditioned on a target
+      domain code. <strong>WGAN-GP</strong> is an unconditional training rule that replaces JS
+      divergence with an Earth-Mover-style distance. <strong>StyleGAN</strong> restructures the
+      generator for fine-grained control of styles at different scales.
+    </p>
+
+    <section class="lab" data-widget="m3-04-cyclegan-walkthrough" data-badge="illustrative"
+             data-title="CycleGAN: A → B → A′"
+             data-note="Illustrative: a schematic three-panel walkthrough with procedural shapes; the loss values shown are worked examples from the lesson, not outputs of a trained model.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Step through the walkthrough. The trick is that no paired photo is needed: a photo of a horse
+      is translated to a zebra-like image, then back to a horse-like image, and the reconstruction
+      is compared with the original. The adversarial losses make each output look native to its
+      domain; the cycle loss keeps the content intact.
+    </p>
+
+    <section class="lab" data-widget="m3-04-stargan-walkthrough" data-badge="illustrative"
+             data-title="StarGAN: one generator, many domains"
+             data-note="Illustrative: procedural attribute changes and a schematic discriminator head indicator; no model is trained in this walkthrough.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Pick a target domain and watch which discriminator head scores the result. The generator sees
+      the input image <em>and</em> the target code; the discriminator sees the image and predicts
+      both real/fake and the domain label. That is how one network serves many domains.
+    </p>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="cycle">1 · Cycle consistency</h3>
+
+    <p>
+      Let \(G:A\to B\) and \(F:B\to A\) be two generators. For \(x\sim p_A\) and \(y\sim p_B\):
+    </p>
+
+    \[
+      \mathcal{L}_{\text{cyc}}=\mathbb{E}_{x}\bigl\lVert F(G(x))-x\bigr\rVert_1
+      +\mathbb{E}_{y}\bigl\lVert G(F(y))-y\bigr\rVert_1
+    \]
+
+    <p>
+      \(\lVert\cdot\rVert_1\) is the sum (here reported as the mean per element) of absolute
+      differences. <strong>Worked example.</strong> With a three-pixel vector
+      \(x=(1,0,-1)\) and \(F(G(x))=(0.8,0.1,-0.9)\):
+    </p>
+
+    \[
+      \lVert F(G(x))-x\rVert_1=\frac{|0.8-1|+|0.1-0|+|-0.9+1|}{3}
+      =\frac{0.2+0.1+0.1}{3}=0.13333
+    \]
+
+    <p>
+      With \(\lambda_{\text{cyc}}=10\), the weighted contribution is \(10\cdot0.13333=1.33333\).
+      The full CycleGAN objective adds the two adversarial terms:
+    </p>
+
+    \[
+      \mathcal{L}=\mathcal{L}_{\text{GAN}}(G,D_B)+\mathcal{L}_{\text{GAN}}(F,D_A)
+      +\lambda_{\text{cyc}}\mathcal{L}_{\text{cyc}}
+      +\lambda_{\text{id}}\mathcal{L}_{\text{id}}
+    \]
+
+    <p>
+      <strong>Worked example.</strong> If the two adversarial losses are 0.71 and 0.68 and the
+      weighted cycle term is 1.33333 (with no identity term), the generator objective is
+      \(0.71+0.68+1.33333=2.72333\). The identity loss
+      \(\mathcal{L}_{\text{id}}=\mathbb{E}_{y\sim p_B}\lVert G(y)-y\rVert_1\) keeps colour and
+      texture stable when the input is already in the target domain.
+      <strong>Worked example.</strong> If \(y=(0.5,-0.5)\) and \(G(y)=(0.4,-0.3)\), then
+      \(\mathcal{L}_{\text{id}}=(0.1+0.2)/2=0.15\), and with \(\lambda_{\text{id}}=5\) it
+      contributes 0.75.
+    </p>
+
+    <h3 id="wgan">2 · WGAN and the gradient penalty</h3>
+
+    \[
+      \max_{\lVert f\rVert_L\le 1}\;
+      \mathbb{E}_{\mathbf{x}\sim p_r}\bigl[f(\mathbf{x})\bigr]
+      -\mathbb{E}_{\tilde{\mathbf{x}}\sim p_g}\bigl[f(\tilde{\mathbf{x}})\bigr]
+    \]
+
+    <p>
+      \(f\) is a <em>critic</em>, not a probability output — its final sigmoid is removed. It must be
+      1-Lipschitz, meaning its gradient norm is at most 1 everywhere. WGAN-GP enforces this with a
+      penalty on random interpolates \(\hat{\mathbf{x}}=\alpha\mathbf{x}+(1-\alpha)\tilde{\mathbf{x}}\),
+      \(\alpha\sim U(0,1)\):
+    </p>
+
+    \[
+      \mathcal{L}_{\text{GP}}=\lambda_{\text{GP}}\,
+      \mathbb{E}_{\hat{\mathbf{x}}}\Bigl[\bigl(\lVert\nabla_{\hat{\mathbf{x}}} f(\hat{\mathbf{x}})\rVert_2-1\bigr)^2\Bigr]
+    \]
+
+    <p>
+      <strong>Worked example.</strong> Take a real scalar \(x=1\), a fake \(\tilde x=0.2\), and
+      \(\alpha=0.5\): the interpolate is \(\hat x=0.5\cdot1+0.5\cdot0.2=0.6\). If the critic is
+      locally \(f(x)=2x-1\), then \(f'(x)=2\), \(\lVert\nabla f\rVert_2=2\), and with
+      \(\lambda_{\text{GP}}=10\) the penalty is \(10(2-1)^2=10\). The critic loss to minimise is
+      \(-\mathbb{E}_r f+\mathbb{E}_g f+\mathcal{L}_{\text{GP}}\).
+    </p>
+
+    <p>
+      Another worked check of the critic term: if \(f\) gives 1.0 and 0.8 on two real samples and
+      \(-0.6\) and \(-0.2\) on two fake samples, then
+      \(\mathbb{E}_r f=(1.0+0.8)/2=0.9\), \(\mathbb{E}_g f=(-0.6-0.2)/2=-0.4\), and the estimated
+      distance is \(0.9-(-0.4)=1.3\). A critic with BatchNorm breaks the gradient penalty, so use
+      GroupNorm or no normalisation and never weight-clip together with GP.
+    </p>
+
+    <h3 id="stargan">3 · StarGAN and the domain-label trick</h3>
+
+    <p>
+      One generator \(G(\mathbf{x},c)\) takes an image and a target domain code \(c\) (often one-hot
+      over \(N_{\text{domains}}\)). The discriminator \(D\) outputs a real/fake logit <em>and</em> a
+      domain logit vector. Its classification loss teaches \(G\) to produce the requested domain:
+    </p>
+
+    \[
+      \mathcal{L}=\mathcal{L}_{\text{adv}}+\lambda_{\text{cls}}\mathcal{L}_{\text{cls}}
+      +\lambda_{\text{rec}}\mathcal{L}_{\text{rec}}
+    \]
+
+    <p>
+      <strong>Worked example.</strong> With four domains the target is \(c=(0,1,0,0)\). If the
+      discriminator's domain logits are \((0.1,2.0,-0.5,0.3)\), the softmax probabilities are
+      \((0.1058,0.7070,0.0580,0.1292)\), so the cross-entropy is
+      \(-\log 0.7070=0.34666\). The reconstruction term \(G(G(x,c),c_{\text{orig}})\) replaces
+      CycleGAN's two generators with a single round trip.
+    </p>
+
+    <h3 id="others">4 · PatchGAN and StyleGAN in one paragraph each</h3>
+
+    <p>
+      A <strong>PatchGAN</strong> discriminator does not output one number per image: it outputs an
+      \(H'\times W'\) map where each cell judges one patch, encouraging sharp local texture.
+      <strong>Worked example.</strong> A 64×64 image with a discriminator whose receptive field is
+      16×16 and stride 16 gives a 4×4 decision map, i.e. 16 patch decisions.
+    </p>
+
+    <p>
+      A <strong>StyleGAN</strong> generator first maps \(\mathbf{z}\in\mathbb{R}^{512}\) through a
+      mapping network to \(\mathbf{w}\in\mathbb{R}^{512}\), then injects \(\mathbf{w}\) as a style
+      at each resolution via adaptive instance normalisation. Early styles control coarse shape,
+      late styles control fine texture; \(W\) is less entangled with the training data than \(Z\).
+    </p>
+
+    <div class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <p>
+        \(G:A\to B\), \(F:B\to A\) two generators · \(D_A,D_B\) domain discriminators ·
+        \(x\sim p_A\), \(y\sim p_B\) unpaired samples · \(\lambda_{\text{cyc}},\lambda_{\text{id}}\),
+        \(\lambda_{\text{cls}},\lambda_{\text{rec}},\lambda_{\text{GP}}\) loss weights ·
+        \(f\) WGAN critic · \(p_r,p_g\) real and generated distributions ·
+        \(\alpha\sim U(0,1)\) interpolation coefficient · \(\hat x\) interpolate ·
+        \(c\) target-domain code · \(\mathbf{z},\mathbf{w}\) StyleGAN latent and mapped style ·
+        \(N_{\text{domains}}\) number of domains.
+      </p>
+    </div>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      Module definitions and shape prints for a CycleGAN-style ResNet generator, a PatchGAN
+      discriminator, and the WGAN-GP gradient penalty. Nothing is downloaded; the tensors are
+      random so you can check the shapes and the penalty value immediately.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+from torch.autograd import grad
+
+torch.manual_seed(0)
+
+class ResNetBlock(nn.Module):
+    def __init__(self, c):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(c, c, 3, padding=1, bias=False), nn.InstanceNorm2d(c), nn.ReLU(True),
+            nn.Conv2d(c, c, 3, padding=1, bias=False), nn.InstanceNorm2d(c),
+        )
+    def forward(self, x):
+        return torch.relu(x + self.block(x))       # skip connection
+
+class CycleGenerator(nn.Module):
+    def __init__(self, c_in=3, c_out=3, n_blocks=6, width=64):
+        super().__init__()
+        layers = [nn.Conv2d(c_in, width, 7, padding=3, bias=False),
+                  nn.InstanceNorm2d(width), nn.ReLU(True)]
+        h, w = width, width
+        for _ in range(2):                          # 64 -> 32 -> 16
+            layers += [nn.Conv2d(h, w * 2, 3, stride=2, padding=1, bias=False),
+                       nn.InstanceNorm2d(w * 2), nn.ReLU(True)]
+            h, w = w * 2, w * 2
+        layers += [ResNetBlock(h) for _ in range(n_blocks)]
+        for _ in range(2):                          # 16 -> 32 -> 64
+            layers += [nn.ConvTranspose2d(h, h // 2, 3, stride=2, padding=1,
+                                          output_padding=1, bias=False),
+                       nn.InstanceNorm2d(h // 2), nn.ReLU(True)]
+            h //= 2
+        layers += [nn.Conv2d(h, c_out, 7, padding=3), nn.Tanh()]
+        self.net = nn.Sequential(*layers)
+    def forward(self, x):
+        return self.net(x)                          # (N, 3, 64, 64)
+
+class PatchGAN(nn.Module):
+    def __init__(self, c_in=3):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(c_in, 64, 4, stride=2, padding=1), nn.LeakyReLU(0.2, True),
+            nn.Conv2d(64, 128, 4, stride=2, padding=1, bias=False),
+            nn.InstanceNorm2d(128), nn.LeakyReLU(0.2, True),
+            nn.Conv2d(128, 256, 4, stride=2, padding=1, bias=False),
+            nn.InstanceNorm2d(256), nn.LeakyReLU(0.2, True),
+            nn.Conv2d(256, 512, 4, stride=1, padding=1, bias=False),
+            nn.InstanceNorm2d(512), nn.LeakyReLU(0.2, True),
+            nn.Conv2d(512, 1, 4, stride=1, padding=1),  # one logit per patch
+        )
+    def forward(self, x):
+        return self.net(x)                           # (N, 1, H', W')
+
+G_AB = CycleGenerator()
+D_B = PatchGAN()
+x = torch.randn(2, 3, 64, 64)
+fake_b = G_AB(x)
+print("input", tuple(x.shape), "fake", tuple(fake_b.shape),
+      "patches", tuple(D_B(fake_b).shape))            # (2,1,4,4) for a 64x64 input
+
+def gradient_penalty(critic, real, fake, lambda_gp=10.0):
+    """WGAN-GP: penalise ||grad f||_2 away from 1 on interpolates."""
+    alpha = torch.rand(real.size(0), 1, 1, 1, device=real.device)
+    inter = (alpha * real + (1 - alpha) * fake.detach()).requires_grad_(True)
+    d = critic(inter)
+    g = grad(outputs=d, inputs=inter,
+             grad_outputs=torch.ones_like(d), create_graph=True)[0]
+    return lambda_gp * ((g.norm(p=2, dim=1) - 1) ** 2).mean()
+
+# A scalar sanity check of the formula from the lesson: real=1, fake=0.2, alpha=0.5.
+r = torch.full((4, 1, 1, 1), 1.0)
+f = torch.full((4, 1, 1, 1), 0.2)
+lin = nn.Conv2d(1, 1, 1)                            # f(x) = w*x + b
+with torch.no_grad():
+    lin.weight.fill_(2.0); lin.bias.fill_(-1.0)
+print("GP (expect 10 with alpha=0.5):",
+      round(gradient_penalty(lin, r, f, 10.0).item(), 4))
+</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      The GP sanity print depends on the random \(\alpha\) values, so it will not be exactly 10
+      unless every sampled \(\alpha\) is 0.5 — the worked example uses that single case. The critic
+      deliberately has no BatchNorm: normalisation within a sample breaks the gradient penalty.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">\(\lambda_{\text{cyc}}\) far too high</p>
+        <p>
+          If cycle consistency dominates, the generator learns the identity map: the output
+          resembles the input and no style transfer happens. Lower the weight until content is
+          preserved but the domain changes.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">No identity loss</p>
+        <p>
+          Without \(\mathcal{L}_{\text{id}}\), feeding an image already in the target domain can
+          shift its colours. Identity mapping acts as a gentle colour-preservation prior.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">GP on the wrong interpolates</p>
+        <p>
+          Interpolate between real and <em>generated</em> samples, not between two reals. Penalising
+          the wrong distribution enforces the constraint where it is not needed.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">BatchNorm in the critic</p>
+        <p>
+          BatchNorm couples samples inside a batch and destroys the clean pointwise gradient norm
+          the penalty measures. Use no normalisation or GroupNorm, and do not also weight-clip.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “my CycleGAN output is almost identical to the input — no style change at
+      all.” The adversarial losses are not zero.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The cycle weight \(\lambda_{\text{cyc}}\) is too large. When the identity map minimises the
+        round-trip error perfectly, the optimiser has no reason to change the appearance: the
+        adversarial terms are too weak to overcome the cycle penalty. Try reducing
+        \(\lambda_{\text{cyc}}\) from 10 toward 1, check that the two domain discriminators are not
+        already at 100% accuracy, and inspect samples at several checkpoints.
+      </p>
+      <p class="small muted">
+        Second possibility: the generators were accidentally tied or the same domain discriminator
+        was used for both sides, which also produces an identity solution.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m3-04">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — GAN variants",
+        "questions": [
+          {
+            "q": "What supervision does CycleGAN need?",
+            "options": [
+              "Paired images from the two domains",
+              "Unpaired sets from two domains",
+              "Class labels for every image",
+              "A pretrained ImageNet classifier"
+            ],
+            "correct": 1,
+            "why": [
+              "Paired images are needed by Pix2Pix, not CycleGAN.",
+              "Correct: two unpaired image sets plus cycle consistency.",
+              "CycleGAN does not use class labels.",
+              "No pretrained classifier is required."
+            ]
+          },
+          {
+            "q": "For x=(1,0,-1) and F(G(x))=(0.8,0.1,-0.9), what is the mean L1 cycle error?",
+            "options": ["0.10", "0.13333", "0.40", "1.33333"],
+            "correct": 1,
+            "why": [
+              "That ignores one of the pixel differences.",
+              "Correct: (0.2+0.1+0.1)/3 = 0.13333.",
+              "That is the summed L1 error before dividing by 3.",
+              "That is the error weighted by lambda_cyc = 10."
+            ]
+          },
+          {
+            "q": "What does the identity loss in CycleGAN encourage?",
+            "options": [
+              "The generator to produce random noise",
+              "Colours and texture to stay stable when the input is already in the target domain",
+              "The discriminator to reach 100% accuracy",
+              "The latent vector to match a Gaussian"
+            ],
+            "correct": 1,
+            "why": [
+              "That is the opposite of useful generation.",
+              "Correct: G(y) should stay close to y for y already in the target domain.",
+              "It has no direct effect on D's accuracy.",
+              "That is a prior on z, not an identity loss."
+            ]
+          },
+          {
+            "q": "What does a WGAN critic output?",
+            "options": [
+              "A probability in (0,1)",
+              "An unbounded real-valued score",
+              "A class index",
+              "A reconstructed image"
+            ],
+            "correct": 1,
+            "why": [
+              "That is a standard GAN discriminator with sigmoid.",
+              "Correct: f(x) is a real number; only its gradient norm is constrained.",
+              "Classification belongs to StarGAN's auxiliary head.",
+              "Critics do not reconstruct images."
+            ]
+          },
+          {
+            "q": "For a real sample x=1, a fake sample x̃=0.2, alpha=0.5 and f'(x)=2, what is the WGAN-GP penalty with lambda_GP=10?",
+            "options": ["0", "2", "10", "20"],
+            "correct": 2,
+            "why": [
+              "A non-unit gradient norm is penalised.",
+              "That is the squared norm, before subtracting 1 and scaling.",
+              "Correct: interpolate x̂=0.6, then 10(2−1)²=10.",
+              "That squares the weight again."
+            ]
+          },
+          {
+            "q": "Why must the critic avoid BatchNorm?",
+            "options": [
+              "It makes training slower",
+              "It breaks the per-sample gradient-norm constraint the penalty measures",
+              "It forces the output to be positive",
+              "It changes the latent dimension"
+            ],
+            "correct": 1,
+            "why": [
+              "Speed is not the reason.",
+              "Correct: BN couples samples, so ||grad f|| no longer has the intended meaning.",
+              "BN does not bound the sign of outputs.",
+              "BN has nothing to do with the latent space."
+            ]
+          },
+          {
+            "q": "How does StarGAN serve several domains with one generator?",
+            "options": [
+              "It trains one generator per domain and averages them",
+              "It conditions the single generator on a target domain code and uses a multi-head discriminator",
+              "It concatenates all domains into one image",
+              "It uses a separate latent code for each pixel"
+            ],
+            "correct": 1,
+            "why": [
+              "That is an ensemble, not StarGAN.",
+              "Correct: G(x,c) plus D's real/fake and domain heads.",
+              "Domains are codes, not image strips.",
+              "The latent code is not per pixel."
+            ]
+          },
+          {
+            "q": "What does a PatchGAN discriminator output for a 64×64 image with 16×16 patches?",
+            "options": [
+              "One scalar for the whole image",
+              "A 4×4 map of patch real/fake decisions",
+              "A 64×64 segmentation mask",
+              "A 16-dimensional class vector"
+            ],
+            "correct": 1,
+            "why": [
+              "That is a global discriminator, not PatchGAN.",
+              "Correct: 64/16 = 4 patches per side, so 16 patch decisions.",
+              "PatchGAN judges texture reality, not semantic labels.",
+              "That describes a classifier head."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · The supervision axis runs Pix2Pix (paired) → CycleGAN (unpaired domains) → StarGAN (many domains) → unconditional GANs.<br>
+        2 · CycleGAN's cycle and identity losses preserve content and colour; WGAN-GP trades the JS game for a 1-Lipschitz critic and a gradient penalty.<br>
+        3 · PatchGAN judges local texture with a map of patch decisions, while StyleGAN's mapping network gives coarse-to-fine style control.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m3-04">
+      <h2>Cheat sheet — M3·04</h2>
+      <ul>
+        <li>Cycle: \(\mathcal{L}_{\text{cyc}}=\mathbb{E}\lVert F(G(x))-x\rVert_1+\mathbb{E}\lVert G(F(y))-y\rVert_1\).</li>
+        <li>Worked cycle error: (0.2+0.1+0.1)/3 = 0.13333; with λ=10 → 1.33333.</li>
+        <li>WGAN: \(\max_{\lVert f\rVert_L\le1}\mathbb{E}_r f-\mathbb{E}_g f\); GP = λ E[(‖∇f‖₂−1)²] on interpolates.</li>
+        <li>Worked GP: x=1, x̃=0.2, α=0.5 → x̂=0.6; f′=2 → 10(2−1)²=10.</li>
+        <li>StarGAN: G(x,c), D predicts real/fake plus domain; losses adv + cls + rec.</li>
+        <li>PatchGAN: one real/fake decision per patch. StyleGAN: z → w mapping + per-resolution styles.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Isola, P. — <em>Image-to-Image Translation with Conditional Adversarial Networks</em> (2017).</li>
+      <li>Zhu, J.-Y. — <em>Unpaired Image-to-Image Translation using Cycle-Consistent Adversarial Networks</em> (2017).</li>
+      <li>Gulrajani, I. — <em>Improved Training of Wasserstein GANs</em> (2017).</li>
+      <li>Choi, Y. — <em>StarGAN: Unified Generative Adversarial Networks for Multi-Domain Image-to-Image Translation</em> (2018).</li>
+      <li>Karras, T. — <em>A Style-Based Generator Architecture for Generative Adversarial Networks</em> (2019).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m3-03-dcgan-and-conditional-gans.html">← DCGAN &amp; cGAN</a>
+      <a href="index.html">Module overview →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M3 GANs</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m3-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

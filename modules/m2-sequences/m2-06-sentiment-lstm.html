@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentiment classification with an LSTM, end to end · DeepLearn Lab</title>
+<meta name="description" content="Build vocabulary → embedding → LSTM → classifier head, handle padding and class imbalance, and train a complete sentiment model on a tiny built-in toy corpus.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m2" data-lesson="m2-06" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="index.html" aria-current="page">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="../m6-toolkit/index.html">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 2 · Sequences &amp; NLP</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M2 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m2-06">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M2 Sequences &amp; NLP</a> / <span>Sentiment LSTM</span>
+    </nav>
+
+    <h1>Sentiment classification with an LSTM, end to end</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 6 of 7 <span class="dot">·</span>
+      <span class="badge badge--illustrative">Illustrative</span> trace, exact gate lab
+    </p>
+    <p class="lede">
+      Tokens become IDs, IDs become vectors, vectors become a sequence of hidden states, and the
+      last state becomes one logit per class. This lesson wires those four steps into a runnable
+      script on a toy corpus you can replace with your own data.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Trace tensor shapes through embedding → LSTM → head with concrete numbers.</li>
+        <li>Handle variable-length sentences with padding, packing and masking.</li>
+        <li>Use class-weighted cross-entropy and evaluate in <code>model.eval()</code> mode.</li>
+        <li>Train a complete LSTM classifier on a tiny built-in corpus, with a clear swap-in point for real data.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        TF-IDF + logistic regression treats a review as a bag of words: “not good” and “good” look
+        almost the same. An LSTM reads in order, so the negation has a chance to change the state
+        before the classifier sees it. The pipeline around it — train split, loss, optimizer, eval —
+        is the same one you already know.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: the last state is a summary</h2>
+
+    <p>
+      You can open the gate dashboard from lesson 03 here and feed it a few words one at a time:
+      each token updates the cell state, and the final state holds the accumulated evidence. For
+      classification, we take that final state (or an attention-weighted pool of all states) and
+      apply a linear head. Padding must not contribute, otherwise the “final” state belongs to a
+      pad token.
+    </p>
+
+    <section class="lab" data-widget="m2-03-gate-dashboard" data-badge="exact"
+             data-title="Read a sentence one token at a time (gate dashboard)"
+             data-note="Exact: the gate, cell and hidden values are recomputed from the displayed pre-activations; use it here to see how a token changes the state.">
+      <div class="lab__body"></div>
+    </section>
+
+    <div class="keyidea">
+      <p>
+        A classifier needs one vector per sentence. The final hidden state is a learned summary of
+        the prefix; pooling all states is an alternative when early tokens matter more.
+      </p>
+    </div>
+
+    <h2 id="math">The math</h2>
+
+    <h3 id="symbols">0 · Symbols</h3>
+    <aside class="callout callout--math">
+      <p class="callout__title">Symbols used in this lesson</p>
+      <ul>
+        <li>N: batch size; T: padded sequence length; V: vocabulary size; D: embedding width; H: hidden width.</li>
+        <li>K: number of classes; ŷ: logits, one score per class; y: the true class index.</li>
+        <li>hₜ: hidden state; ℓₙ: per-example cross-entropy (minus log softmax at the true label); w_y: class weight.</li>
+      </ul>
+    </aside>
+
+    <h3 id="shape">1 · Shape trace</h3>
+
+    <table class="shape-table">
+      <caption>Worked shapes for N=4, T=6, V=50, D=8, H=16, K=2, one bidirectional layer</caption>
+      <thead><tr><th>step</th><th>shape</th><th>arithmetic</th></tr></thead>
+      <tbody>
+        <tr><td>token IDs</td><td>(4, 6)</td><td>padded batch</td></tr>
+        <tr><td>embedding</td><td>(4, 6, 8)</td><td>V·D = 50·8 = 400 table entries</td></tr>
+        <tr><td>LSTM output</td><td>(4, 6, 32)</td><td>2H = 2·16 = 32</td></tr>
+        <tr><td>last states concat</td><td>(4, 32)</td><td>forward + backward at t = T</td></tr>
+        <tr><td>head logits</td><td>(4, 2)</td><td>32·2 + 2 = 66 parameters</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      The final hidden state is a function of every input:
+      \[ \mathbf{h}_T = f\!\left(\mathbf{x}_T,\; f\!\left(\mathbf{x}_{T-1},\;\dots f\!\left(\mathbf{x}_1,\mathbf{h}_0\right)\right)\right) \]
+      That nested composition is why one vector can summarize a sentence. If the batch is right-padded,
+      however, the “T-th” token is a pad — use the true length or pack the sequence.
+    </p>
+
+    <h3 id="weightedce">2 · Class-weighted cross-entropy</h3>
+
+    \[ \mathcal{L} = \frac{\sum_{n=1}^{N} w_{y_n}\,\ell_n}{\sum_{n=1}^{N} w_{y_n}},
+       \qquad \ell_n=-\log\mathrm{softmax}(\hat{\mathbf y}_n)_{y_n} \]
+
+    <p>
+      Worked: two examples, class 0 with per-example loss 0.2 and class 1 with loss 0.4.
+      The positive class is rarer, so its weight is 3 while class 0 has weight 1:
+    </p>
+
+    \[ \mathcal{L} = \frac{1\cdot0.2 + 3\cdot0.4}{1+3} = \frac{1.4}{4} = 0.35 \]
+
+    <p>
+      Without weights the mean would be 0.30 — the weighted loss penalizes mistakes on the rarer
+      class three times as much.
+    </p>
+
+    <h3 id="pool">3 · Last state vs mean pool</h3>
+
+    \[ \mathbf{z} = \mathbf{h}_T \quad\text{or}\quad
+       \mathbf{z} = \frac{1}{L}\sum_{t=1}^{L}\mathbf{h}_t \]
+
+    <p>
+      The hand-built trace below shows the difference with fixed numbers. For
+      <code>i love this film</code> the pooling weights are 0.05, 0.55, 0.15, 0.25 and the token
+      scores are 0, 1, 0.3, 0.7. Two worked lines:
+    </p>
+
+    \[ \text{pooled} = 0.55\cdot1 + 0.15\cdot0.3 + 0.25\cdot0.7 = 0.770 \]
+    \[ \hat y = -0.3 + 2.5\cdot0.770 = 1.625,\qquad p=\sigma(1.625)=0.835 \]
+
+    <p>
+      Putting all weight on the last token instead gives pooled 0.7, logit 1.45 and probability 0.810.
+      The weights here are hand-built to make the arithmetic visible — no model was trained to
+      produce them.
+    </p>
+
+    <section class="lab" data-widget="m2-06-sentiment-trace" data-badge="illustrative"
+             data-title="Hand-built sentiment pooling trace"
+             data-note="Illustrative: per-token pooling weights and sentiment scores are hand-built, not learned; the pooled score, logit and sigmoid are computed exactly from them.">
+      <div class="lab__body"></div>
+    </section>
+
+    <h2 id="code">Code</h2>
+
+    <p>
+      This is the flagship script: a complete LSTM sentiment classifier on a built-in toy corpus,
+      with no downloads. The marked block is the only part to change for a real dataset. Evaluate
+      with <code>model.eval()</code> and <code>torch.no_grad()</code> so dropout is off.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+        <button class="tabs__tab" role="tab" aria-selected="false">Keras</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import torch
+from torch import nn
+from torch.utils.data import Dataset, DataLoader
+from collections import Counter
+
+torch.manual_seed(0)
+
+# ---- SWAP-IN POINT: replace this tiny built-in corpus with your own (text, label) pairs ----
+TRAIN = [
+    ("i love this film", 1), ("a wonderful sweet movie", 1),
+    ("great acting and a kind story", 1), ("i enjoyed every minute", 1),
+    ("this was dull and slow", 0), ("a terrible boring film", 0),
+    ("i hated the plot", 0), ("bad acting and a weak script", 0),
+]
+TEST = [("i love the story", 1), ("a dull and boring movie", 0)]
+# ---------------------------------------------------------------------------
+
+def tokenize(s):
+    return s.lower().split()
+
+counter = Counter(w for s, _ in TRAIN for w in tokenize(s))  # TRAIN only: no leakage
+stoi = {"&lt;pad&gt;": 0, "&lt;unk&gt;": 1}
+for w, _ in counter.most_common():
+    stoi[w] = len(stoi)
+
+class Reviews(Dataset):
+    def __init__(self, rows):
+        self.rows = rows
+    def __len__(self):
+        return len(self.rows)
+    def __getitem__(self, k):
+        text, y = self.rows[k]
+        ids = [stoi.get(w, 1) for w in tokenize(text)] or [1]
+        return ids, y
+
+def collate(batch):
+    T = max(len(ids) for ids, _ in batch)
+    X = torch.full((len(batch), T), 0, dtype=torch.long)   # pad index 0
+    lens = torch.tensor([len(ids) for ids, _ in batch])
+    y = torch.tensor([lab for _, lab in batch])
+    for n, (ids, _) in enumerate(batch):
+        X[n, :len(ids)] = torch.tensor(ids)
+    return X, lens, y
+
+train_dl = DataLoader(Reviews(TRAIN), batch_size=4, shuffle=True, collate_fn=collate)
+
+class SentimentLSTM(nn.Module):
+    def __init__(self, V, D=16, H=16, classes=2):
+        super().__init__()
+        self.emb = nn.Embedding(V, D, padding_idx=0)
+        self.lstm = nn.LSTM(D, H, batch_first=True, bidirectional=True)
+        self.head = nn.Linear(2 * H, classes)
+    def forward(self, x, lengths):
+        e = self.emb(x)                               # (N, T, D)
+        packed = nn.utils.rnn.pack_padded_sequence(
+            e, lengths.cpu(), batch_first=True, enforce_sorted=False)
+        out, (h_n, _) = self.lstm(packed)             # h_n: (2, N, H)
+        both = torch.cat((h_n[0], h_n[1]), dim=1)     # (N, 2H)
+        return self.head(both)                        # (N, K) logits
+
+model = SentimentLSTM(len(stoi))
+weights = torch.tensor([1.0, 3.0])                    # class 1 is rarer here
+loss_fn = nn.CrossEntropyLoss(weight=weights)
+opt = torch.optim.Adam(model.parameters(), lr=0.01)
+
+for epoch in range(120):
+    model.train()
+    for X, lens, y in train_dl:
+        opt.zero_grad()
+        logits = model(X, lens)                       # (N, 2)
+        loss = loss_fn(logits, y)                     # logits first, labels second
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        opt.step()
+    if epoch % 40 == 0:
+        print("epoch", epoch, "loss", round(loss.item(), 4))
+
+model.eval()
+with torch.no_grad():
+    X, lens, y = collate([(s, lab) for s, lab in TEST])
+    pred = model(X, lens).argmax(dim=1)
+    print("test predictions:", pred.tolist(), "labels:", y.tolist())
+
+print("embedding params:", model.emb.weight.numel(), "= V*D =", len(stoi), "* 16")</code></pre>
+      </div>
+      <div class="tabs__panel" role="tabpanel" hidden>
+<pre class="code" data-lang="python"><code>import tensorflow as tf
+from collections import Counter
+
+tf.random.set_seed(0)
+
+TRAIN = [
+    ("i love this film", 1), ("a wonderful sweet movie", 1),
+    ("great acting and a kind story", 1), ("i enjoyed every minute", 1),
+    ("this was dull and slow", 0), ("a terrible boring film", 0),
+    ("i hated the plot", 0), ("bad acting and a weak script", 0),
+]
+counter = Counter(w for s, _ in TRAIN for w in s.lower().split())
+stoi = {"&lt;pad&gt;": 0, "&lt;unk&gt;": 1}
+for w, _ in counter.items():
+    stoi[w] = len(stoi)
+
+def encode(text, T=8):
+    ids = [stoi.get(w, 1) for w in text.lower().split()][:T]
+    return ids + [0] * (T - len(ids))
+
+X = tf.constant([encode(s) for s, _ in TRAIN])
+y = tf.constant([lab for _, lab in TRAIN])
+
+model = tf.keras.Sequential([
+    tf.keras.layers.Embedding(len(stoi), 16, mask_zero=True, input_length=8),
+    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(16)),
+    tf.keras.layers.Dense(2),                       # logits
+])
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(0.01),
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+    metrics=["accuracy"],
+)
+model.fit(X, y, epochs=120, verbose=0,
+          class_weight={0: 1.0, 1: 3.0})
+print(model.evaluate(X, y, verbose=0))
+print(model.count_params())</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      Eight training sentences cannot teach general sentiment — this script demonstrates the
+      plumbing and shapes, not a benchmark. Replace the marked corpus (and raise the epoch count)
+      for a real task.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Padding not masked</p>
+        <p>
+          A padded final state obscures the real last token. Pass lengths to
+          <code>pack_padded_sequence</code> or use <code>mask_zero=True</code> in Keras.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title"><code>batch_first</code> mismatch</p>
+        <p>
+          Your batch is \((N,T,D)\); the default RNN expects \((T,N,D)\). Set
+          <code>batch_first=True</code> in every layer, including stacked ones.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Embedding without padding index</p>
+        <p>
+          Without <code>padding_idx=0</code>, pad rows receive gradients and the table learns
+          that “nothing” has meaning. Reserve and freeze row 0.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Evaluating with dropout on</p>
+        <p>
+          Forgetting <code>model.eval()</code> makes predictions random and lowers measured
+          accuracy. Switch back to <code>model.train()</code> for the next epoch.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      A reader reports: “training loss falls but accuracy is exactly 50% on my balanced two-class
+      toy set.” The script above was edited in one place.
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        Check the loss call first. <code>nn.CrossEntropyLoss</code> expects
+        <code>loss_fn(logits, labels)</code> with logits of shape \((N,2)\) and labels \((N,)\).
+        Passing <code>loss_fn(labels, logits)</code> or applying a softmax before the loss changes
+        the target axes; broadcasting can silently accept the wrong shapes and the head learns to
+        predict a constant. The other common edit is computing accuracy from
+        <code>logits.argmax(dim=0)</code> instead of <code>dim=1</code>, which compares across the
+        batch and yields a constant 50% on balanced data.
+      </p>
+      <p class="small muted">
+        Print <code>logits.shape</code>, <code>y.shape</code> and one batch of
+        <code>logits.softmax(dim=1)</code> before changing the learning rate.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m2-06">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — sentiment LSTM",
+        "questions": [
+          {
+            "q": "With N=4, T=6, D=8, an embedding layer outputs…",
+            "options": ["(4, 6)", "(4, 8)", "(4, 6, 8)", "(6, 4, 8)"],
+            "correct": 2,
+            "why": [
+              "That is the token-ID shape before embedding.",
+              "That drops the time axis.",
+              "Correct: the embedding adds a D-sized vector at every one of the T positions.",
+              "That swaps batch and time."
+            ]
+          },
+          {
+            "q": "Why can the final hidden state serve as a sentence summary?",
+            "options": [
+              "It is initialized from the label",
+              "It is a function of all previous inputs through the recurrence",
+              "It always has larger magnitude than earlier states",
+              "It stores the vocabulary IDs"
+            ],
+            "correct": 1,
+            "why": [
+              "Labels are used only in the loss.",
+              "Correct: h_T depends on x_1…x_T via the chain of updates.",
+              "Magnitude is not what makes it informative.",
+              "IDs live in the embedding input, not the state."
+            ]
+          },
+          {
+            "q": "With right-padded batches, why use pack_padded_sequence?",
+            "options": [
+              "To sort the vocabulary",
+              "To stop the LSTM at each true length so h_n is the real final state",
+              "To increase the embedding width",
+              "To disable the classifier head"
+            ],
+            "correct": 1,
+            "why": [
+              "Sorting is a side effect only when enforce_sorted=True; it is not the purpose.",
+              "Correct: packed sequences skip pads during the recurrence.",
+              "Width is set by the embedding constructor.",
+              "The head is still needed."
+            ]
+          },
+          {
+            "q": "For w₀=1, w₁=3, ℓ₀=0.2 and ℓ₁=0.4, what is the weighted cross-entropy?",
+            "options": ["0.30", "0.35", "0.70", "1.40"],
+            "correct": 1,
+            "why": [
+              "That is the unweighted mean.",
+              "Correct: (1·0.2 + 3·0.4)/(1+3) = 1.4/4 = 0.35.",
+              "That omits the denominator.",
+              "That is only the numerator."
+            ]
+          },
+          {
+            "q": "Why build the vocabulary from the training split only?",
+            "options": [
+              "It makes tokens shorter",
+              "It prevents test vocabulary from leaking into training",
+              "It removes the need for padding",
+              "It guarantees higher accuracy"
+            ],
+            "correct": 1,
+            "why": [
+              "Vocabulary construction does not change token lengths.",
+              "Correct: test words must not influence which tokens exist during training.",
+              "Padding is independent of vocabulary construction.",
+              "No guarantee of any particular accuracy is implied."
+            ]
+          },
+          {
+            "q": "What does model.eval() change at evaluation time?",
+            "options": [
+              "It increases the learning rate",
+              "It disables dropout and uses running statistics",
+              "It deletes the optimizer",
+              "It reverses the LSTM"
+            ],
+            "correct": 1,
+            "why": [
+              "The learning rate is untouched.",
+              "Correct: eval mode turns off dropout and switches BatchNorm to running statistics.",
+              "The optimizer remains available.",
+              "Direction is fixed at construction."
+            ]
+          },
+          {
+            "q": "A bidirectional LSTM with H=16 produces what shape at the final timestep?",
+            "options": ["(N, 16)", "(N, 32)", "(16, N)", "(N, 2, 16)"],
+            "correct": 1,
+            "why": [
+              "That is one direction only.",
+              "Correct: the two H-dimensional directions are concatenated into 2H = 32 features.",
+              "That confuses batch with features.",
+              "h_n has that shape internally, but the classifier input is (N, 32)."
+            ]
+          },
+          {
+            "q": "Accuracy is stuck at 50% on a balanced binary task while loss falls. First check…",
+            "options": [
+              "The argmax axis and the logits/label order in the loss",
+              "The number of epochs only",
+              "The embedding dimension only",
+              "Whether the corpus is printable"
+            ],
+            "correct": 0,
+            "why": [
+              "Correct: argmax over the batch instead of classes, or swapped loss arguments, produces constant accuracy.",
+              "More epochs cannot fix a shape or argument bug.",
+              "Width alone rarely produces exactly 50%.",
+              "That is irrelevant."
+            ]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · The pipeline is token IDs (N,T) → embedding (N,T,D) → LSTM output (N,T,2H) → head logits (N,K).<br>
+        2 · Use true lengths (packing or a mask) and <code>padding_idx=0</code> so pads never define the final state.<br>
+        3 · Weight rare classes in CE, build vocab from train only, and evaluate with <code>model.eval()</code>.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m2-06">
+      <h2>Cheat sheet — M2·06</h2>
+      <ul>
+        <li>Embedding table V·D parameters, row 0 reserved for <code>&lt;pad&gt;</code>.</li>
+        <li>Bidirectional LSTM: output \((N,T,2H)\), <code>h_n</code> \((2,N,H)\); concatenate the two directions.</li>
+        <li>Class-weighted CE: L = Σ w_y·ℓₙ / Σ w_y; worked 1.4/4 = 0.35.</li>
+        <li>Worked logit: pooled 0.770 → ŷ = −0.3 + 2.5·0.770 = 1.625 → p = 0.835.</li>
+        <li>Loop order: zero_grad → forward → loss → backward → clip → step; evaluate in <code>eval()</code> mode without gradients.</li>
+        <li>Vocabulary from TRAIN only; logits shape (N,K), labels shape (N).</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Hochreiter, S. &amp; Schmidhuber, J. — <em>Long Short-Term Memory</em> (1997).</li>
+      <li>Goodfellow, I. — <em>Deep Learning</em>, chapter 10 (2016).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="m2-05-embeddings.html">← Embeddings</a>
+      <a href="m2-07-attention-and-transformers.html">Next: attention &amp; transformers →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M2 Sequences &amp; NLP</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m2-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>

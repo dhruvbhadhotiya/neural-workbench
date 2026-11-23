@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seeds, determinism and experiment tracking · DeepLearn Lab</title>
+<meta name="description" content="Make a training run reproducible: seed every RNG, log the config that changed the result, and average metrics across seeds with the right standard error.">
+<link rel="stylesheet" href="../../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../../assets/css/tokens.css">
+<link rel="stylesheet" href="../../assets/css/base.css">
+<link rel="stylesheet" href="../../assets/css/components.css">
+<link rel="stylesheet" href="../../assets/css/print.css">
+<script>
+  try {
+    var q = /[?&]theme=(light|dark)\b/.exec(location.search);
+    var t = q ? q[1] : localStorage.getItem("dll:theme");
+    if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
+</head>
+<body data-module="m6" data-lesson="m6-01" data-root="../../">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="topbar__brand" href="../../index.html"><span class="topbar__mark">DL</span> <span>DeepLearn Lab</span></a>
+  <nav class="topbar__nav" aria-label="Primary">
+    <a href="../m0-foundations/index.html">M0</a>
+    <a href="../m1-cnns/index.html">M1</a>
+    <a href="../m2-sequences/index.html">M2</a>
+    <a href="../m3-gans/index.html">M3</a>
+    <a href="../m4-autoencoders/index.html">M4</a>
+    <a href="../m5-segmentation/index.html">M5</a>
+    <a href="index.html" aria-current="page">M6</a>
+  </nav>
+  <div class="topbar__tools">
+    <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="Lesson contents">
+    <p class="sidebar__eyebrow">Module 6 · Advanced toolkit</p>
+    <nav class="sidebar__toc" id="toc" aria-label="On this page"></nav>
+    <div class="sidebar__foot">
+      <a href="index.html">← All M6 lessons</a>
+    </div>
+  </aside>
+
+  <main id="main" class="lesson" data-lesson="m6-01">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a> / <a href="index.html">M6 Advanced toolkit</a> / <span>Reproducibility</span>
+    </nav>
+
+    <h1>Seeds, determinism and experiment tracking</h1>
+    <p class="meta">
+      <span data-reading-time>—</span> <span class="dot">·</span>
+      Lesson 1 of 7 <span class="dot">·</span>
+      <span class="badge badge--illustrative">Illustrative spread</span> + <span class="badge badge--exact">Exact checklist</span> labs
+    </p>
+    <p class="lede">
+      A single seed is not an experiment. Learn which sources of randomness a deep-learning run has,
+      how to pin them down, and how to report a metric whose uncertainty you can actually compute.
+    </p>
+
+    <section class="objectives" aria-labelledby="obj-h">
+      <h2 id="obj-h">Objectives</h2>
+      <ul>
+        <li>Name the independent RNG sources in a PyTorch run and seed each one.</li>
+        <li>Explain why deterministic kernels cost throughput and what to log besides the seed.</li>
+        <li>Compute the standard error of a metric and average results over seeds correctly.</li>
+        <li>Verify a replay of the same configuration bit-for-bit using a config hash.</li>
+      </ul>
+    </section>
+
+    <aside class="callout callout--bridge">
+      <p class="callout__title">You know this from ML → here it becomes</p>
+      <p>
+        In scikit-learn, <code>random_state=42</code> on the estimator was usually enough. A deep run
+        has at least four independent random streams — Python, NumPy, the CPU/CUDA torch generators
+        and the DataLoader workers — plus algorithm choices that are nondeterministic even with a
+        fixed stream. Reproducibility is now a <em>system property</em>, not a keyword argument.
+      </p>
+    </aside>
+
+    <h2 id="intuition">Intuition: four streams, plus a fifth source</h2>
+
+    <p>
+      Think of a run as a recipe that draws random numbers at five different stations. Station one
+      is Python's <code>random</code>, used by dataset splits and augmentation libraries. Station two
+      is NumPy's legacy global generator, still used by many data pipelines. Station three is
+      PyTorch's CPU generator (weight init, dropout). Station four is the CUDA generator, used by
+      GPU-only sampling such as dropout masks on device. Station five is not an RNG at all: a
+      GPU kernel that reduces in a different order on different launches, such as atomic
+      additions in a scatter or a convolution selected by cuDNN's autotuner.
+    </p>
+
+    <p>
+      Seeding only <code>torch.manual_seed</code> fixes station three. If your augmentation uses
+      NumPy, or your loader has four worker processes, each worker inherits a different — often
+      uncontrolled — state, and the training examples arrive in a different order. The loss curve
+      then differs by a few percent between two "identical" runs, which is exactly the symptom in
+      the debug challenge at the end of this lesson.
+    </p>
+
+    <div class="keyidea">
+      <p>
+        Repeatability needs a fixed seed <em>and</em> a fixed execution path: same data order, same
+        kernel algorithms, same library versions, same hardware class. A seed without a config
+        hash is a number nobody can interpret later.
+      </p>
+    </div>
+
+    <h2 id="math">The math: spread, standard error and seed averaging</h2>
+
+    <h3 id="variance">1 · Variance of one metric estimate</h3>
+
+    <p>
+      Let \(A\) be the accuracy on a test set of \(n\) examples drawn from a population with true
+      accuracy \(p\). Each example is a Bernoulli trial, so \(\operatorname{Var}(A)=p(1-p)/n\).
+      Here \(p\) is the true accuracy of the model on the population and \(n\) is the number of
+      test examples — not the number of seeds.
+    </p>
+
+    \[ \widehat{\operatorname{Var}}(A)=\frac{\hat p(1-\hat p)}{n},
+       \qquad \operatorname{SE}(A)=\sqrt{\frac{\hat p(1-\hat p)}{n}} \]
+
+    <p>
+      <strong>Worked example.</strong> A model gets \(84\) of \(100\) test items right, so
+      \(\hat p=0.84\). Then \(\hat p(1-\hat p)=0.84\cdot0.16=0.1344\), and
+      \(\widehat{\operatorname{Var}}=0.1344/100=0.001344\). The standard error is
+      \(\sqrt{0.001344}=0.0367\): the usual 95% interval is roughly \(0.84\pm1.96\cdot0.0367\),
+      i.e. \([0.768,\;0.912]\). This interval is about the <em>test sample</em>; seed variability
+      is a separate quantity measured next.
+    </p>
+
+    <h3 id="seeds">2 · Across-seed variance</h3>
+
+    <p>
+      Let \(a_1,\dots,a_S\) be the final metric from \(S\) independently seeded runs, with sample
+      standard deviation \(s_a=\sqrt{\frac{1}{S-1}\sum_{s=1}^{S}(a_s-\bar a)^2}\). The mean over
+      seeds is
+    </p>
+
+    \[ \bar a=\frac{1}{S}\sum_{s=1}^{S} a_s,
+       \qquad \operatorname{SE}(\bar a)=\frac{s_a}{\sqrt{S}} \]
+
+    <p>
+      Here \(S\) is the number of seeds and \(a_s\) is the metric of run \(s\). Dividing by
+      \(\sqrt{S}\) is the whole point: four seeds cut the seed-related standard error in half,
+      but they do not shrink the test-set error above.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Three seeds give \(0.82,\;0.85,\;0.87\). Then
+      \(\bar a=(0.82+0.85+0.87)/3=2.54/3=0.8467\). Deviations from the mean are \(-0.0267,
+      0.0033, 0.0233\); their squares sum to \(0.000711+0.000011+0.000544=0.001266\); with
+      \(S-1=2\) we get \(s_a=\sqrt{0.000633}=0.0252\) and \(\operatorname{SE}(\bar a)=0.0252/\sqrt3
+      =0.0145\). Reporting "\(0.847\pm0.015\) (3 seeds)" is honest; reporting only \(0.87\) is
+      cherry-picking the best seed.
+    </p>
+
+    <h3 id="hash">3 · Config hashing</h3>
+
+    <p>
+      A config hash is a fixed-size fingerprint of every setting that could change the result.
+      With a 32-bit FNV-1a hash \(h(c)\), the probability that two different configs collide is
+      about \(1/2^{32}\approx2.3\times10^{-10}\) for one pair.
+    </p>
+
+    <p>
+      <strong>Worked example.</strong> Two configs differ only in the seed field. Hashing the
+      canonical JSON strings <code>{"seed":1,"lr":0.01}</code> and
+      <code>{"seed":2,"lr":0.01}</code> gives two different 32-bit values; the widget below prints
+      them as eight hex digits. Canonical means sorted keys and fixed number formatting, or the
+      same config can hash differently just because a dictionary was iterated in another order.
+      A checkpoint should carry this hash, the library versions, the git commit and the seed —
+      weights alone do not tell you which recipe produced them.
+    </p>
+
+    <h2 id="lab">Lab: seed spread and determinism checklist</h2>
+
+    <p>
+      The left panel draws final accuracies from a <em>stated</em> normal distribution
+      \(\mathcal{N}(0.85,\,0.02^2)\) — this part is a simulation, hence the illustrative badge.
+      The right panel is exact: it checks a list of concrete requirements, hashes the config
+      string you can edit, and runs the same seeded sampler twice to compare the resulting
+      eight-hex-digit digest.
+    </p>
+
+    <section class="lab" data-widget="m6-01-seed-lab" data-badge="illustrative"
+             data-title="Seed spread and a determinism audit"
+             data-note="Illustrative: accuracies are sampled from the stated N(0.85, 0.02²) distribution; exact: the checklist, config hash and replay digest are computed in your browser.">
+      <div class="lab__body"></div>
+    </section>
+
+    <p>
+      Read the replay digest before trusting the spread: if two runs with the same seed and the
+      same config produce different digests in the simulator, no amount of seed averaging will
+      rescue the experiment. On real GPUs, set <code>torch.backends.cudnn.benchmark = False</code>
+      and call <code>torch.use_deterministic_algorithms(True)</code>; some operations will then
+      raise an error instead of silently choosing a fast, nondeterministic algorithm. That error
+      is useful — it tells you which kernel to replace.
+    </p>
+
+    <h2 id="code">Code: seeding, deterministic kernels and a minimal logger</h2>
+
+    <div class="tabs" data-tabs>
+      <div class="tabs__list" role="tablist">
+        <button class="tabs__tab" role="tab" aria-selected="true">PyTorch</button>
+      </div>
+      <div class="tabs__panel" role="tabpanel">
+<pre class="code" data-lang="python"><code>import os, random, json, hashlib
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
+
+SEED = 42
+os.environ["PYTHONHASHSEED"] = str(SEED)   # set before Python starts
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.benchmark = False     # no autotuner kernel switching
+torch.backends.cudnn.deterministic = True
+torch.use_deterministic_algorithms(True)   # raise on nondeterministic ops
+
+def seed_worker(worker_id):
+    wseed = torch.initial_seed() % 2**32
+    random.seed(wseed); np.random.seed(wseed)
+
+g = torch.Generator(); g.manual_seed(SEED)
+loader = DataLoader(dataset, batch_size=32, shuffle=True,
+                    num_workers=4, worker_init_fn=seed_worker, generator=g)
+# All four worker streams are now distinct but reproducible.
+
+def canonical(cfg):
+    return json.dumps(cfg, sort_keys=True, separators=(",", ":"))
+
+cfg = {"seed": SEED, "lr": 1e-3, "epochs": 10, "arch": "mlp-256"}
+cfg_hash = hashlib.sha256(canonical(cfg).encode()).hexdigest()[:16]
+
+record = {"cfg": cfg, "cfg_hash": cfg_hash, "seed": SEED,
+          "torch": torch.__version__, "cuda": torch.version.cuda,
+          "final_acc": 0.0}
+with open("run.jsonl", "a") as f:
+    f.write(json.dumps(record) + "\n")
+
+# For multiple seeds: train once per seed, then report mean and sample std.
+accs = []
+for s in (0, 1, 2, 3, 4):
+    torch.manual_seed(s)                  # re-seed before each run
+    accs.append(train_one_run(s))         # your training function
+mean_acc = float(np.mean(accs))
+se_acc = float(np.std(accs, ddof=1) / np.sqrt(len(accs)))
+print(f"{mean_acc:.4f} +/- {se_acc:.4f} over {len(accs)} seeds, cfg {cfg_hash}")</code></pre>
+      </div>
+    </div>
+
+    <p class="small muted">
+      Use <code>CUBLAS_WORKSPACE_CONFIG=:4096:8</code> in the environment when deterministic
+      CUDA matmuls are required; without it some CUDA versions raise at
+      <code>use_deterministic_algorithms(True)</code>. Determinism can reduce throughput, so many
+      teams run deterministic verification builds and faster production builds from the same config.
+    </p>
+
+    <h2 id="mistakes">Common mistakes</h2>
+
+    <div class="grid2">
+      <aside class="callout callout--warn">
+        <p class="callout__title">Seeding only torch</p>
+        <p>
+          Python, NumPy and DataLoader workers keep their own streams. A fixed
+          <code>torch.manual_seed</code> still leaves augmentation order and worker behaviour random.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Benchmark mode left on</p>
+        <p>
+          <code>cudnn.benchmark=True</code> picks a kernel based on timing. The pick can change
+          between machines or runs, so bitwise replay fails even with every seed fixed.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Comparing runs with different order</p>
+        <p>
+          Changing <code>num_workers</code> or batch size changes the sequence of examples. The
+          seed is identical but the optimisation trajectory is not — log these knobs with the seed.
+        </p>
+      </aside>
+      <aside class="callout callout--warn">
+        <p class="callout__title">Reporting the best of five seeds</p>
+        <p>
+          Taking the maximum of \(S\) noisy metrics biases the estimate upward. Report the mean
+          and \(s_a/\sqrt S\), and state \(S\) next to the number.
+        </p>
+      </aside>
+    </div>
+
+    <h2 id="debug">Debug this</h2>
+
+    <p>
+      Two runs use the same seed, the same code and the same GPU, yet final accuracy differs by
+      about 3%. The training loop, model and loss are identical. What do you check first?
+    </p>
+
+    <details>
+      <summary>Show the likely cause and the fix</summary>
+      <p>
+        The DataLoader workers. Each worker process inherits or derives its own NumPy/Python RNG;
+        if <code>worker_init_fn</code> is missing (or uses the same seed for every worker), random
+        augmentation and shuffle order differ between runs. Pass a seeded <code>generator</code>
+        to the loader and a <code>seed_worker</code> function that reseeds from
+        <code>torch.initial_seed()</code>. Also set <code>shuffle=True</code> through that generator
+        rather than a global NumPy state.
+      </p>
+      <p class="small muted">
+        If the difference survives on one worker, the next suspect is
+        <code>cudnn.benchmark</code> or a nondeterministic scatter/atomic kernel. Turn on
+        <code>torch.use_deterministic_algorithms(True)</code> and follow the exception it raises.
+      </p>
+    </details>
+
+    <h2 id="quiz">Check yourself</h2>
+
+    <section class="quiz" data-quiz="m6-01">
+      <script type="application/json" class="quiz__data">
+      {
+        "title": "Check yourself — reproducibility",
+        "questions": [
+          {
+            "q": "Which call seeds PyTorch's CUDA generators across all devices?",
+            "options": ["random.seed(42)", "np.random.seed(42)", "torch.cuda.manual_seed_all(42)", "torch.backends.cudnn.benchmark = True"],
+            "correct": 2,
+            "why": ["That seeds only Python's random module.", "That seeds only NumPy's global generator.", "Correct: it seeds the CUDA generator on every device.", "That enables kernel autotuning — the opposite of determinism."]
+          },
+          {
+            "q": "A test set of 400 examples gives accuracy 0.75. What is the approximate standard error from test sampling alone?",
+            "options": ["0.0217", "0.0433", "0.0108", "0.0019"],
+            "correct": 0,
+            "why": ["Correct: sqrt(0.75*0.25/400) = sqrt(0.000469) = 0.0217.", "That is the variance before dividing by 400.", "That divides by 1600 instead of 400.", "That forgets the square root and divides twice."]
+          },
+          {
+            "q": "Three seeds give accuracies 0.80, 0.84 and 0.88. What is the reported mean?",
+            "options": ["0.80", "0.84", "0.88", "0.86"],
+            "correct": 1,
+            "why": ["That is the lowest seed, not the mean.", "Correct: (0.80+0.84+0.88)/3 = 0.84.", "That is the highest seed; reporting it is cherry-picking.", "That averages only the first and last value."]
+          },
+          {
+            "q": "What does torch.use_deterministic_algorithms(True) do when a chosen kernel is nondeterministic?",
+            "options": ["It silently falls back to a random kernel", "It doubles the batch size", "It raises an error so you can replace that operation", "It disables gradient computation"],
+            "correct": 2,
+            "why": ["It never silently ignores the request.", "Batch size is unrelated to this setting.", "Correct: the error reveals which operation must be changed.", "Autograd stays enabled."]
+          },
+          {
+            "q": "Why should a checkpoint carry a config hash?",
+            "options": ["It compresses the weights", "It identifies the exact settings that produced the weights", "It replaces the seed", "It makes inference faster"],
+            "correct": 1,
+            "why": ["A hash does not compress tensors.", "Correct: weights alone cannot tell you the lr, augmentation or code version.", "A hash and a seed are complementary, not substitutes.", "No inference path uses the config hash."]
+          },
+          {
+            "q": "Doubling the number of independent seeds changes the seed-related standard error by what factor?",
+            "options": ["2", "1/2", "1/sqrt(2)", "sqrt(2)"],
+            "correct": 2,
+            "why": ["The error shrinks rather than grows.", "That would require four times as many seeds.", "Correct: SE = s/sqrt(S), so doubling S multiplies it by 1/sqrt(2).", "That is the factor for halving S."]
+          },
+          {
+            "q": "Which item is NOT an independent RNG stream in a typical PyTorch run?",
+            "options": ["Python random", "NumPy global generator", "PyTorch CPU generator", "The learning rate scheduler"],
+            "correct": 3,
+            "why": ["Python's random is its own stream.", "NumPy has its own global generator.", "PyTorch's CPU generator is separate from NumPy's.", "Correct: a scheduler is deterministic given the schedule; it draws no random numbers."]
+          },
+          {
+            "q": "Two runs differ only in num_workers. Both seeds are fixed. What is the most likely explanation for different results?",
+            "options": ["The model has more parameters", "The order and augmentation of examples changed", "Cross-entropy became MSE", "The GPU was reset"],
+            "correct": 1,
+            "why": ["Worker count does not change the architecture.", "Correct: more workers change how data is produced and delivered, hence the training trajectory.", "Loss choice is a separate config field.", "No GPU reset is implied."]
+          }
+        ]
+      }
+      </script>
+    </section>
+
+    <h2 id="summary">Summary</h2>
+
+    <div class="keyidea">
+      <p>
+        1 · Seed Python, NumPy, torch CPU, torch CUDA and every DataLoader worker — then disable cuDNN autotuning.<br>
+        2 · A config hash, library versions and the seed belong in every checkpoint; without them the number has no context.<br>
+        3 · Report \(\bar a \pm s_a/\sqrt S\) over several seeds; test-set error \(p(1-p)/n\) is a separate quantity.
+      </p>
+    </div>
+
+    <section class="cheatsheet" data-cheatsheet="m6-01">
+      <h2>Cheat sheet — M6·01</h2>
+      <ul>
+        <li>Seeds: <code>random</code>, <code>np.random</code>, <code>torch.manual_seed</code>, <code>torch.cuda.manual_seed_all</code>, worker <code>generator</code>.</li>
+        <li>Test error: \(\operatorname{SE}=\sqrt{\hat p(1-\hat p)/n}\); with \(n=400,\hat p=0.75\): 0.0217.</li>
+        <li>Seed error: \(\operatorname{SE}(\bar a)=s_a/\sqrt S\); \(S=4\) halves it.</li>
+        <li>Determinism: <code>cudnn.benchmark=False</code>, <code>use_deterministic_algorithms(True)</code>, fixed data order.</li>
+        <li>Log: seed, canonical config hash, versions, hardware class, commit, metric.</li>
+      </ul>
+    </section>
+
+    <h2 id="reading">Further reading</h2>
+    <ul class="refs">
+      <li>Krizhevsky, A. — <em>ImageNet Classification with Deep Convolutional Neural Networks</em> (2012).</li>
+      <li>Ioffe, S. — <em>Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift</em> (2015).</li>
+      <li>Kingma, D. — <em>Adam: A Method for Stochastic Optimization</em> (2015).</li>
+    </ul>
+
+    <nav class="prevnext" aria-label="Lesson navigation">
+      <a href="index.html">← Module overview</a>
+      <a href="m6-02-performance.html">Next: performance →</a>
+    </nav>
+
+    <footer class="lesson__foot">
+      <span>DeepLearn Lab · M6 Advanced toolkit</span>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    </footer>
+  </main>
+</div>
+
+<script defer src="../../assets/js/core.js"></script>
+<script defer src="../../assets/js/store.js"></script>
+<script defer src="../../assets/js/tensor.js"></script>
+<script defer src="../../assets/js/nn.js"></script>
+<script defer src="../../assets/js/viz.js"></script>
+<script defer src="../../assets/js/ui.js"></script>
+<script defer src="../../assets/js/quiz.js"></script>
+<script defer src="../../assets/js/progress.js"></script>
+<script defer src="../../assets/js/widgets.js"></script>
+<script defer src="../../assets/data/glossary.js"></script>
+<script defer src="../../assets/js/search-index.js"></script>
+<script defer src="widgets/m6-widgets.js"></script>
+<script defer src="../../assets/vendor/katex/katex.min.js"></script>
+<script defer src="../../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script defer src="../../assets/js/lesson.js"></script>
+</body>
+</html>
