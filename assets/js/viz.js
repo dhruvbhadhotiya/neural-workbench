@@ -302,7 +302,7 @@
     }
 
     var p = V.palette();
-    var palette = opts.colors || [p.accent, p.danger, p.ok, p.warn, p.ink2, "#8b5cf6"];
+    var palette = opts.colors || [p.accent, p.ink2, p.ink3, p.ok, p.warn, p.danger];
     ctx.save();
     ctx.beginPath();
     ctx.rect(r.x, r.y, r.w, r.h);
@@ -359,7 +359,7 @@
         xlabel: opts.xlabel, ylabel: opts.ylabel
       });
     }
-    var palette = opts.colors || [p.accent, p.danger, p.ok, p.warn, "#8b5cf6"];
+    var palette = opts.colors || [p.accent, p.ink2, p.ink3, p.ok, p.warn];
     ctx.save();
     ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
     pts.forEach(function (q) {

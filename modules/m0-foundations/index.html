@@ -36,7 +36,7 @@
   </nav>
   <div class="topbar__tools">
     <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
-    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false"></button>
   </div>
 </header>
 
@@ -51,10 +51,10 @@
         line of a PyTorch loop.
       </p>
       <div class="hstack">
-        <a class="btn btn--accent" href="m0-01-perceptron-to-mlp.html" style="padding:9px 14px;font-size:var(--fs-3)">Start lesson 1 →</a>
-        <a class="btn" href="#exam" style="padding:9px 14px;font-size:var(--fs-3)">Take the module exam</a>
+        <a class="btn btn--accent btn--hero" href="m0-01-perceptron-to-mlp.html" >Start lesson 1 →</a>
+        <a class="btn btn--hero" href="#exam" >Take the module exam</a>
       </div>
-      <div class="hero__stats" style="margin-top:var(--s6)">
+      <div class="hero__stats">
         <div class="hero__stat"><b>5</b><span>lessons</span></div>
         <div class="hero__stat"><b>7</b><span>exact labs</span></div>
         <div class="hero__stat"><b>10</b><span>exam questions</span></div>
@@ -62,14 +62,8 @@
       </div>
     </div>
     <div aria-hidden="true">
-      <svg viewBox="0 0 420 320" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
-        <defs>
-          <linearGradient id="m0edge" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".15"/>
-            <stop offset="100%" stop-color="var(--accent)" stop-opacity=".75"/>
-          </linearGradient>
-        </defs>
-        <g stroke="url(#m0edge)" stroke-width="1.5">
+      <svg viewBox="0 0 420 320" width="100%" class="hero__diagram" role="presentation">
+        <g stroke="var(--line-strong)" stroke-width="1.5">
           <path d="M60 80 L170 45"/><path d="M60 80 L170 110"/><path d="M60 160 L170 45"/>
           <path d="M60 160 L170 110"/><path d="M60 160 L170 175"/>
           <path d="M60 240 L170 110"/><path d="M60 240 L170 175"/>
@@ -349,7 +343,7 @@
     <div class="hstack" style="gap:var(--s4)">
       <a href="../../index.html">All modules</a>
       <a href="#" data-action="search">Search</a>
-      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false"></button>
     </div>
   </footer>
 </main>

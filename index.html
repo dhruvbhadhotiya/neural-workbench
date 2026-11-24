@@ -37,7 +37,7 @@
   </nav>
   <div class="topbar__tools">
     <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
-    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false"></button>
   </div>
 </header>
 
@@ -52,11 +52,11 @@
         pixels, gradients from a real backward pass, a GAN training in your browser.
       </p>
       <div class="hstack">
-        <a class="btn btn--accent" href="modules/m0-foundations/m0-01-perceptron-to-mlp.html"
-           style="padding:9px 14px;font-size:var(--fs-3)">Start with M0 →</a>
-        <a class="btn" href="#roadmap" style="padding:9px 14px;font-size:var(--fs-3)">See the roadmap</a>
+        <a class="btn btn--accent btn--hero" href="modules/m0-foundations/m0-01-perceptron-to-mlp.html"
+           >Start with M0 →</a>
+        <a class="btn btn--hero" href="#roadmap">See the roadmap</a>
       </div>
-      <div class="hero__stats" style="margin-top:var(--s6)">
+      <div class="hero__stats">
         <div class="hero__stat"><b>7</b><span>modules</span></div>
         <div class="hero__stat"><b data-total-lessons>40</b><span>lessons</span></div>
         <div class="hero__stat"><b>64</b><span>labs</span></div>
@@ -65,14 +65,8 @@
     </div>
 
     <div aria-hidden="true">
-      <svg viewBox="0 0 420 320" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
-        <defs>
-          <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".15"/>
-            <stop offset="100%" stop-color="var(--accent)" stop-opacity=".75"/>
-          </linearGradient>
-        </defs>
-        <g stroke="url(#edge)" stroke-width="1">
+      <svg viewBox="0 0 420 320" width="100%" class="hero__diagram" role="presentation">
+        <g stroke="var(--line-strong)" stroke-width="1">
           <path d="M60 70 L160 40"/><path d="M60 70 L160 100"/><path d="M60 70 L160 160"/>
           <path d="M60 160 L160 40"/><path d="M60 160 L160 100"/><path d="M60 160 L160 160"/>
           <path d="M60 250 L160 100"/><path d="M60 250 L160 160"/><path d="M60 250 L160 220"/>
@@ -97,11 +91,11 @@
 
   <section class="dayplan" aria-label="Five day plan">
     <div class="dayplan__inner">
-      <div class="dayplan__day"><b>DAY 1</b><span>CNNs from convolution maths to ResNets, detection and transfer learning.</span></div>
-      <div class="dayplan__day"><b>DAY 2</b><span>RNNs, BPTT, LSTM/GRU, tokenizers, embeddings, attention and transformers.</span></div>
-      <div class="dayplan__day"><b>DAY 3</b><span>GAN objectives, DCGAN, mode collapse, FID, CycleGAN and WGAN-GP.</span></div>
-      <div class="dayplan__day"><b>DAY 4</b><span>Autoencoders, VAEs, BERT, GPT decoding, LoRA and pretrained workflow.</span></div>
-      <div class="dayplan__day"><b>DAY 5</b><span>Segmentation (U-Net, Mask R-CNN) and an end-to-end Kaggle playbook.</span></div>
+      <div class="dayplan__day"><b>Day 1</b><span>CNNs from convolution maths to ResNets, detection and transfer learning.</span></div>
+      <div class="dayplan__day"><b>Day 2</b><span>RNNs, BPTT, LSTM/GRU, tokenizers, embeddings, attention and transformers.</span></div>
+      <div class="dayplan__day"><b>Day 3</b><span>GAN objectives, DCGAN, mode collapse, FID, CycleGAN and WGAN-GP.</span></div>
+      <div class="dayplan__day"><b>Day 4</b><span>Autoencoders, VAEs, BERT, GPT decoding, LoRA and pretrained workflow.</span></div>
+      <div class="dayplan__day"><b>Day 5</b><span>Segmentation (U-Net, Mask R-CNN) and an end-to-end Kaggle playbook.</span></div>
     </div>
   </section>
 
@@ -146,7 +140,7 @@
   <div class="hstack" style="gap:var(--s4)">
     <a href="modules/m6-toolkit/index.html">Glossary</a>
     <a href="#" data-action="search">Search</a>
-    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false"></button>
   </div>
 </footer>
 

@@ -1,6 +1,7 @@
 /* ==========================================================================
    DeepLearn Lab — tokens.css
    Design tokens, themes, per-module accents.
+   Warm paper neutrals, ink-blue accent, one harmonious set of module hues.
    ========================================================================== */
 
 :root {
@@ -12,18 +13,19 @@
   --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas,
     "Liberation Mono", monospace;
 
-  --fs-1: 0.75rem;   /* 12px  eyebrows, badges      */
-  --fs-2: 0.8125rem; /* 13px  meta, captions       */
-  --fs-3: 0.9375rem; /* 15px  UI, tables           */
-  --fs-4: 1.0625rem; /* 17px  prose                */
-  --fs-5: 1.25rem;   /* 20px  h3                   */
-  --fs-6: 1.5rem;    /* 24px  h2                   */
-  --fs-7: 1.875rem;  /* 30px  h1 lesson            */
-  --fs-8: clamp(2.25rem, 1.4rem + 3.4vw, 3.75rem); /* hero            */
-  --fs-9: clamp(2.75rem, 1.2rem + 6vw, 5.5rem);    /* landing display */
+  --fs-0: 0.6875rem;  /* 11px  micro meta               */
+  --fs-1: 0.75rem;    /* 12px  labels, badges           */
+  --fs-2: 0.8125rem;  /* 13px  meta, captions           */
+  --fs-3: 0.9375rem;  /* 15px  UI, tables               */
+  --fs-4: 1.0625rem;  /* 17px  prose                    */
+  --fs-5: 1.25rem;    /* 20px  h3                       */
+  --fs-6: 1.5rem;     /* 24px  h2                       */
+  --fs-7: 1.875rem;   /* 30px  h1 lesson                */
+  --fs-8: clamp(2.25rem, 1.4rem + 3.4vw, 3.75rem); /* hero         */
+  --fs-9: clamp(2.25rem, 1.2rem + 3vw, 3.5rem);    /* landing display */
 
-  --lh-tight: 1.14;
-  --lh-snug: 1.35;
+  --lh-tight: 1.16;
+  --lh-snug: 1.4;
   --lh-body: 1.68;
   --measure: 66ch;
 
@@ -32,7 +34,7 @@
   --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px; --s9: 96px;
 
   /* ---- radius / borders ---------------------------------------------- */
-  --r1: 5px; --r2: 9px; --r3: 14px; --r-pill: 999px;
+  --r1: 6px; --r2: 10px; --r3: 16px; --r-pill: 999px;
   --bw: 1px;
 
   /* ---- layout -------------------------------------------------------- */
@@ -41,82 +43,91 @@
   --sidebar-w: 250px;
   --topbar-h: 58px;
 
-  /* ---- light theme --------------------------------------------------- */
-  --bg: #f7f6f2;
-  --bg-tint: #f0eee7;
-  --surface: #ffffff;
-  --surface-2: #f4f2ec;
-  --surface-3: #eae7de;
-  --ink-1: #16151a;
-  --ink-2: #45434f;
-  --ink-3: #6f6c7d;
-  --ink-4: #9a97a6;
-  --line: #e0ddd3;
-  --line-strong: #c6c2b6;
-  --code-bg: #17161d;
-  --code-ink: #e8e6f0;
-  --code-line: #2b2934;
+  /* ---- light theme — warm paper -------------------------------------- */
+  --bg: #f7f5ef;
+  --bg-tint: #f0ede4;
+  --surface: #fdfcf9;
+  --surface-2: #f4f1e9;
+  --surface-3: #e9e5da;
+  --ink-1: #1b1a17;
+  --ink-2: #4f4c45;
+  --ink-3: #726e64;
+  --ink-4: #9c978b;
+  --line: #e2ded2;
+  --line-strong: #c8c3b5;
+  --code-bg: #171a21;
+  --code-bar: #111319;
+  --code-ink: #e8e9ee;
+  --code-line: #2b2f39;
 
   --ok: #0f7b4f;
   --warn: #8a5200;
   --danger: #b3261e;
 
-  --accent: #6d5efc;
-  --accent-strong: #4b3ae0;
-  --accent-soft: #ecebff;
+  /* Ink blue — annotation ink on warm paper */
+  --accent: #2f55c4;
+  --accent-strong: #233f9c;
+  --accent-soft: #e9edfb;
   --accent-ink: #ffffff;
 
-  --shadow-1: 0 1px 2px rgba(22, 21, 26, 0.05), 0 4px 16px rgba(22, 21, 26, 0.05);
-  --shadow-2: 0 2px 6px rgba(22, 21, 26, 0.07), 0 16px 40px rgba(22, 21, 26, 0.09);
-  --focus: 0 0 0 3px var(--accent-soft), 0 0 0 5px var(--accent);
+  --shadow-1: 0 1px 2px rgba(27, 26, 23, 0.05);
+  --shadow-2: 0 8px 24px rgba(27, 26, 23, 0.07);
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+
+  /* Line icons for the theme toggle (one set, 16px, 1.5 stroke) */
+  --icon-sun: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='24'%20height='24'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Ccircle%20cx='12'%20cy='12'%20r='4'/%3E%3Cpath%20d='M12%202v2M12%2020v2M4.93%204.93l1.41%201.41M17.66%2017.66l1.41%201.41M2%2012h2M20%2012h2M6.34%2017.66l-1.41%201.41M19.07%204.93l-1.41%201.41'/%3E%3C/svg%3E");
+  --icon-moon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='24'%20height='24'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M21%2012.79A9%209%200%201%201%2011.21%203%207%207%200%200%200%2021%2012.79z'/%3E%3C/svg%3E");
 }
 
 [data-theme="dark"] {
-  --bg: #0e0e12;
-  --bg-tint: #131319;
-  --surface: #17171e;
-  --surface-2: #1e1e27;
-  --surface-3: #262631;
-  --ink-1: #f1f0f5;
-  --ink-2: #bcb9c8;
-  --ink-3: #8b8899;
-  --ink-4: #6a6778;
-  --line: #2a2a34;
-  --line-strong: #3d3d4b;
-  --code-bg: #0b0b0f;
-  --code-ink: #e8e6f0;
-  --code-line: #24242e;
+  --bg: #0e0f12;
+  --bg-tint: #141519;
+  --surface: #18191e;
+  --surface-2: #202127;
+  --surface-3: #292a32;
+  --ink-1: #f1f0ec;
+  --ink-2: #c0bdb4;
+  --ink-3: #929087;
+  --ink-4: #6e6c65;
+  --line: #2b2c33;
+  --line-strong: #3f414a;
+  --code-bg: #0b0c0f;
+  --code-bar: #090a0d;
+  --code-ink: #e8e9ee;
+  --code-line: #24262e;
 
   --ok: #52d68a;
   --warn: #f5b942;
   --danger: #ff8078;
 
-  --accent-soft: #211d3d;
+  --accent: #8aa6f0;
+  --accent-strong: #a9bdff;
+  --accent-soft: #1b2540;
 
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45), 0 6px 20px rgba(0, 0, 0, 0.32);
-  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.5), 0 24px 60px rgba(0, 0, 0, 0.42);
-  --focus: 0 0 0 3px #0e0e12, 0 0 0 5px var(--accent);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
 
-/* ---- per-module accents ---------------------------------------------- */
-[data-module="m0"] { --accent: #6d5efc; --accent-strong: #4b3ae0; --accent-soft: #ecebff; }
-[data-module="m1"] { --accent: #2563eb; --accent-strong: #1d4ed8; --accent-soft: #e6efff; }
-[data-module="m2"] { --accent: #0d9488; --accent-strong: #0b7c72; --accent-soft: #ddf4f0; }
-[data-module="m3"] { --accent: #db2777; --accent-strong: #be185d; --accent-soft: #fde7f1; }
-[data-module="m4"] { --accent: #d97706; --accent-strong: #b45309; --accent-soft: #fdf0dc; }
-[data-module="m5"] { --accent: #16a34a; --accent-strong: #15803d; --accent-soft: #e3f6e9; }
-[data-module="m6"] { --accent: #b91c1c; --accent-strong: #991b1b; --accent-soft: #fbe5e5; }
+/* ---- per-module accents: one quiet, related set ----------------------- */
+[data-module="m0"] { --accent: #2f55c4; --accent-strong: #233f9c; --accent-soft: #e9edfb; }
+[data-module="m1"] { --accent: #2b6f9c; --accent-strong: #1f5476; --accent-soft: #e6f0f6; }
+[data-module="m2"] { --accent: #0f7a6e; --accent-strong: #0b5b52; --accent-soft: #e3f2ef; }
+[data-module="m3"] { --accent: #a34673; --accent-strong: #85355d; --accent-soft: #f8eaf1; }
+[data-module="m4"] { --accent: #a86a12; --accent-strong: #87540d; --accent-soft: #f8efdd; }
+[data-module="m5"] { --accent: #3f7d4a; --accent-strong: #31623a; --accent-soft: #e8f1e7; }
+[data-module="m6"] { --accent: #a24a42; --accent-strong: #833a33; --accent-soft: #f7eae7; }
 
-[data-theme="dark"] [data-module="m0"] { --accent: #8b7dff; --accent-soft: #211d3d; }
-[data-theme="dark"] [data-module="m1"] { --accent: #5b8cff; --accent-soft: #17233d; }
-[data-theme="dark"] [data-module="m2"] { --accent: #2dd4bf; --accent-soft: #102e2b; }
-[data-theme="dark"] [data-module="m3"] { --accent: #f472b6; --accent-soft: #331426; }
-[data-theme="dark"] [data-module="m4"] { --accent: #fbbf24; --accent-soft: #302312; }
-[data-theme="dark"] [data-module="m5"] { --accent: #4ade80; --accent-soft: #122b1b; }
-[data-theme="dark"] [data-module="m6"] { --accent: #f87171; --accent-soft: #2f1414; }
+[data-theme="dark"] [data-module="m0"] { --accent: #8aa6f0; --accent-strong: #a9bdff; --accent-soft: #1b2540; }
+[data-theme="dark"] [data-module="m1"] { --accent: #7fb4d6; --accent-strong: #a3cef0; --accent-soft: #142a38; }
+[data-theme="dark"] [data-module="m2"] { --accent: #5cc4b4; --accent-strong: #84dfd1; --accent-soft: #102d2a; }
+[data-theme="dark"] [data-module="m3"] { --accent: #dc8fb4; --accent-strong: #f0b0cd; --accent-soft: #371a2a; }
+[data-theme="dark"] [data-module="m4"] { --accent: #d9a552; --accent-strong: #ecc47f; --accent-soft: #302411; }
+[data-theme="dark"] [data-module="m5"] { --accent: #78bd83; --accent-strong: #9ed7a8; --accent-soft: #152b1a; }
+[data-theme="dark"] [data-module="m6"] { --accent: #dc8c84; --accent-strong: #f0ada5; --accent-soft: #331917; }
 
 /* ---- motion ---------------------------------------------------------- */
+:root { --dur-1: 140ms; --dur-2: 220ms; --ease: cubic-bezier(0.22, 1, 0.36, 1); }
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-1: 0ms; --dur-2: 0ms; }
 }
-:root { --dur-1: 120ms; --dur-2: 240ms; --ease: cubic-bezier(0.22, 0.61, 0.36, 1); }

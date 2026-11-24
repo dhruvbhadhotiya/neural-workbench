@@ -16,7 +16,6 @@
       btns.forEach(function (b) {
         b.setAttribute("aria-pressed", String(dark));
         b.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
-        if (b.dataset.label !== "icon") b.textContent = dark ? "☀" : "◑";
       });
     }
     btns.forEach(function (b) {

@@ -36,7 +36,7 @@
   </nav>
   <div class="topbar__tools">
     <button class="btn btn--ghost" data-action="search" aria-label="Search lessons">Search <kbd>/</kbd></button>
-    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+    <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false"></button>
   </div>
 </header>
 
@@ -51,10 +51,10 @@
         that you can see. Every number on screen is computed in your browser.
       </p>
       <div class="hstack">
-        <a class="btn btn--accent" href="m2-01-sequences-and-rnns.html" style="padding:9px 14px;font-size:var(--fs-3)">Start lesson 1 →</a>
-        <a class="btn" href="#exam" style="padding:9px 14px;font-size:var(--fs-3)">Take the module exam</a>
+        <a class="btn btn--accent btn--hero" href="m2-01-sequences-and-rnns.html" >Start lesson 1 →</a>
+        <a class="btn btn--hero" href="#exam" >Take the module exam</a>
       </div>
-      <div class="hero__stats" style="margin-top:var(--s6)">
+      <div class="hero__stats">
         <div class="hero__stat"><b>7</b><span>lessons</span></div>
         <div class="hero__stat"><b>8</b><span>exact labs</span></div>
         <div class="hero__stat"><b>10</b><span>exam questions</span></div>
@@ -62,14 +62,8 @@
       </div>
     </div>
     <div aria-hidden="true">
-      <svg viewBox="0 0 420 320" width="100%" style="max-width:420px;margin-left:auto" role="presentation">
-        <defs>
-          <linearGradient id="m2edge" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".15"/>
-            <stop offset="100%" stop-color="var(--accent)" stop-opacity=".75"/>
-          </linearGradient>
-        </defs>
-        <g stroke="url(#m2edge)" stroke-width="1.5" fill="none">
+      <svg viewBox="0 0 420 320" width="100%" class="hero__diagram" role="presentation">
+        <g stroke="var(--line-strong)" stroke-width="1.5" fill="none">
           <path d="M45 70 C110 20, 150 120, 210 70 S310 20, 380 90"/>
           <path d="M45 130 C110 80, 150 180, 210 130 S310 80, 380 150"/>
           <path d="M45 190 C110 140, 150 240, 210 190 S310 140, 380 210"/>
@@ -368,7 +362,7 @@
     <div class="hstack" style="gap:var(--s4)">
       <a href="../../index.html">All modules</a>
       <a href="#" data-action="search">Search</a>
-      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false">◑</button>
+      <button class="btn btn--ghost" data-action="theme" aria-label="Toggle dark theme" aria-pressed="false"></button>
     </div>
   </footer>
 </main>
